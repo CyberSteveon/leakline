@@ -1,6 +1,6 @@
 # Leakline
 
-A desktop security scanner built for IT teams, MSPs, and sysadmins. Lealine performs local, on-premises file scanning for secrets, vulnerabilities, and environment-specific misconfigurations — no data leaves your machine.
+A desktop security scanner built for IT teams, MSPs, and sysadmins. Leakline performs local, on-premises file scanning for secrets, vulnerabilities, and environment-specific misconfigurations — no data leaves your machine.
 
 Built with Tauri v2, Rust, and React.
 
