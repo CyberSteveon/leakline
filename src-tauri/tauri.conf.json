@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "SecureScopeScanner",
+  "productName": "Leakline",
   "version": "0.1.0",
-  "identifier": "com.tauri.dev",
+  "identifier": "com.cybersteveon.leakline",
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:5173",
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "Secure Scope Scanner",
+        "title": "Leakline",
         "width": 800,
         "height": 600,
         "resizable": true,
