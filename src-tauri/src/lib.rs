@@ -116,7 +116,7 @@ pub fn is_allowed_filename(filename: Option<&std::ffi::OsStr>) -> bool {
 
 #[tauri::command]
 fn app_info() -> String {
-  let app_name = "Secure Scope Scanner";
+  let app_name = "leakline";
   let version = "0.1.0";
 
   format!("{}\nVersion: {}", app_name, version)

@@ -1,6 +1,6 @@
-# SecurelyScoped
+# Leakline
 
-A desktop security scanner built for IT teams, MSPs, and sysadmins. SecurelyScoped performs local, on-premises file scanning for secrets, vulnerabilities, and environment-specific misconfigurations — no data leaves your machine.
+A desktop security scanner built for IT teams, MSPs, and sysadmins. Lealine performs local, on-premises file scanning for secrets, vulnerabilities, and environment-specific misconfigurations — no data leaves your machine.
 
 Built with Tauri v2, Rust, and React.
 
@@ -42,8 +42,8 @@ Built with Tauri v2, Rust, and React.
 
 ```bash
 # Clone the repo
-git clone https://github.com/CyberSteveon/SecurelyScoped.git
-cd SecurelyScoped
+git clone https://github.com/CyberSteveon/leakline.git
+cd leakline
 
 # Install frontend dependencies
 npm install
@@ -54,8 +54,8 @@ npm run tauri dev
 
 ```powershell (windows)
 # Clone the repo
-git clone https://github.com/CyberSteveon/SecurelyScoped.git
-Set-Location SecurelyScoped
+git clone https://github.com/CyberSteveon/leaklin.git
+Set-Location leaklin
 
 # Install frontend dependencies
 npm install
@@ -69,7 +69,7 @@ npm run tauri dev
 ## Project Structure
 
 
-SecurelyScoped/
+leakline/
 ├── src/                  # React frontend
 ├── src-tauri/
 │   ├── src/
