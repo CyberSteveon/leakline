@@ -40,6 +40,7 @@ pub struct Finding {
 pub enum IssueStage {
     Target,
     Discovery,
+    Native,
     Result,
 }
 
