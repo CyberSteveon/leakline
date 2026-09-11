@@ -22,6 +22,7 @@ pub fn app_info() -> String {
 // Compatibility command for callers that only need the candidate file paths.
 // Unlike the original implementation, discovery errors are returned instead of
 // being silently discarded. New callers should use start_scan and get_scan_result.
+#[deprecated(note = "Use start_scan and get_scan_result instead.")]
 #[tauri::command]
 pub fn scan_directory(path: String) -> Result<Vec<String>, ScanCommandError> {
     let target = validate_target(&path)?;

@@ -230,6 +230,7 @@ mod tests {
             ScanLimits {
                 max_file_size_bytes: 8,
                 max_candidate_files: 100,
+                ..ScanLimits::default()
             },
             &cancellation,
             |_| {},
@@ -259,6 +260,7 @@ mod tests {
             ScanLimits {
                 max_file_size_bytes: 100,
                 max_candidate_files: 1,
+                ..ScanLimits::default()
             },
             &cancellation,
             |_| {},

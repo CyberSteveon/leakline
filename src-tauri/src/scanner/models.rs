@@ -41,6 +41,8 @@ pub enum IssueStage {
     Target,
     Discovery,
     Native,
+    Gitleaks,
+    Semgrep,
     Result,
 }
 
@@ -111,7 +113,12 @@ pub enum ScanStatus {
 #[serde(rename_all = "snake_case")]
 pub enum ScanPhase {
     Queued,
+    ValidatingTarget,
     Discovering,
+    ScanningNative,
+    ScanningGitleaks,
+    ScanningSemgrep,
+    Normalizing,
     Completed,
     Cancelled,
 }
@@ -140,6 +147,9 @@ pub struct ScanCompleted {
 #[serde(rename_all = "camelCase")]
 pub struct ScanRequest {
     pub target_path: String,
+    pub scanner_ids: Option<Vec<String>>,
+    pub exclude_paths: Option<Vec<String>>,
+    pub include_paths: Option<Vec<String>>,
 }
 
 #[derive(Debug, Serialize, Clone, PartialEq, Eq)]
@@ -173,14 +183,25 @@ impl ScanCommandError {
 
 #[derive(Debug, Serialize, Clone, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+pub struct ScannerRunSummary {
+    pub scanner_id: String,
+    pub status: ScanStatus,
+    pub findings_count: u64,
+    pub issues_count: u64,
+    pub duration_ms: u128,
+}
+
+#[derive(Debug, Serialize, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub struct ScanResult {
     pub scan_id: u64,
     pub target: ScanTargetSummary,
     pub status: ScanStatus,
-    pub started_at_unix_ms: u128,
-    pub finished_at_unix_ms: Option<u128>,
+    pub started_at: String,
+    pub finished_at: Option<String>,
     pub summary: ScanSummary,
     pub coverage: CoverageSummary,
+    pub scanner_runs: Vec<ScannerRunSummary>,
     pub findings: Vec<Finding>,
     pub issues: Vec<ScanIssue>,
 }
