@@ -133,7 +133,7 @@ pub fn is_allowed_filename(filename: Option<&OsStr>) -> bool {
         || starts_with.iter().any(|prefix| name.starts_with(prefix))
         || ends_with.iter().any(|suffix| name.ends_with(suffix))
         // Exact matches pulled from const — single source of truth, no duplication.
-        || ALLOWED_FILENAMES.iter().any(|allowed| name.as_str() == *allowed)
+        || ALLOWED_FILENAMES.contains(&name.as_str())
 }
 
 #[cfg(test)]

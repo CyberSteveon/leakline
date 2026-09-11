@@ -150,7 +150,7 @@ impl ScanManager {
             if total_bytes_read >= self.limits.max_total_bytes_read {
                 limit_reached = true;
                 outcome.issues.push(ScanIssue {
-                    issue_id: format!("native-limit"),
+                    issue_id: "native-limit".to_string(),
                     stage: IssueStage::Native,
                     code: "max_bytes_read".to_string(),
                     severity: IssueSeverity::Warning,
@@ -181,8 +181,10 @@ impl ScanManager {
             }
         }
         
-        let mut summary = ScanSummary::default();
-        summary.finding_count = findings.len() as u64;
+        let mut summary = ScanSummary {
+            finding_count: findings.len() as u64,
+            ..Default::default()
+        };
         for finding in &findings {
             match finding.severity {
                 crate::scanner::models::Severity::Minimal => summary.minimal_count += 1,
@@ -298,7 +300,7 @@ fn progress_for(
 }
 
 fn now_rfc3339() -> String {
-    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
     let mut seconds = now;
     let days = seconds / 86400;
     seconds %= 86400;
