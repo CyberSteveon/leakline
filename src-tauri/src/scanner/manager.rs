@@ -8,7 +8,7 @@ use super::discovery;
 use super::limits::ScanLimits;
 use super::models::{
     CancelAcknowledged, CoverageSummary, ScanCommandError, ScanCompleted, ScanPhase, ScanProgress,
-    ScanRequest, ScanResult, ScanStarted, ScanStatus, ScanSummary,
+    ScanRequest, ScanResult, ScanStarted, ScanStatus, ScanSummary, ScanIssue, IssueStage, IssueSeverity
 };
 use super::target::{validate_target, ValidatedTarget};
 
@@ -95,7 +95,7 @@ impl ScanManager {
 
     pub fn run(&self, handle: ScanHandle, observer: &dyn ScanObserver) {
         let scan_id = handle.started.scan_id;
-        let started_at_unix_ms = unix_time_ms();
+        let started_at_unix_ms = now_rfc3339();
         observer.progress(progress_for(
             scan_id,
             ScanPhase::Queued,
@@ -111,7 +111,7 @@ impl ScanManager {
             0,
         ));
 
-        let outcome = discovery::discover(
+        let mut outcome = discovery::discover(
             &handle.target.canonical_path,
             self.limits,
             &handle.cancellation,
@@ -126,9 +126,78 @@ impl ScanManager {
             },
         );
 
-        let status = if outcome.cancelled {
+        let mut findings = Vec::new();
+        let mut total_bytes_read = 0;
+        let mut processed_files = 0;
+        let mut next_finding_id = 0;
+        let native_scanner = crate::scanner::native::NativeScanner::default_scanner();
+
+        observer.progress(progress_for(
+            scan_id,
+            ScanPhase::ScanningNative,
+            &outcome.coverage,
+            processed_files,
+            outcome.issues.len() as u64,
+        ));
+
+        let mut limit_reached = false;
+
+        for file in &outcome.files {
+            if handle.cancellation.load(Ordering::Relaxed) {
+                break;
+            }
+
+            if total_bytes_read >= self.limits.max_total_bytes_read {
+                limit_reached = true;
+                outcome.issues.push(ScanIssue {
+                    issue_id: "native-limit".to_string(),
+                    stage: IssueStage::Native,
+                    code: "max_bytes_read".to_string(),
+                    severity: IssueSeverity::Warning,
+                    message: "Exceeded max total bytes read.".to_string(),
+                    relative_path: None,
+                    scanner_id: Some("native".to_string()),
+                });
+                break;
+            }
+
+            if let Ok(content) = std::fs::read_to_string(&file.absolute_path) {
+                total_bytes_read += content.len() as u64;
+                let rule_file = crate::scanner::native::RuleFile::new(&file.relative_path, &content);
+                let native_outcome = native_scanner.scan_file(&rule_file, &mut next_finding_id);
+                findings.extend(native_outcome.findings);
+                outcome.issues.extend(native_outcome.issues);
+            }
+            processed_files += 1;
+            
+            if processed_files == 1 || processed_files % 100 == 0 {
+                observer.progress(progress_for(
+                    scan_id,
+                    ScanPhase::ScanningNative,
+                    &outcome.coverage,
+                    processed_files,
+                    outcome.issues.len() as u64,
+                ));
+            }
+        }
+        
+        let mut summary = ScanSummary {
+            finding_count: findings.len() as u64,
+            ..Default::default()
+        };
+        for finding in &findings {
+            match finding.severity {
+                crate::scanner::models::Severity::Minimal => summary.minimal_count += 1,
+                crate::scanner::models::Severity::Low => summary.low_count += 1,
+                crate::scanner::models::Severity::Medium => summary.medium_count += 1,
+                crate::scanner::models::Severity::High => summary.high_count += 1,
+                crate::scanner::models::Severity::Critical => summary.critical_count += 1,
+            }
+        }
+
+        let status = if handle.cancellation.load(Ordering::Relaxed) || outcome.cancelled {
             ScanStatus::Cancelled
-        } else if outcome.coverage.candidate_limit_reached {
+        } else if outcome.coverage.candidate_limit_reached || limit_reached {
             ScanStatus::Partial
         } else if outcome.issues.is_empty() {
             ScanStatus::Completed
@@ -140,11 +209,12 @@ impl ScanManager {
             scan_id,
             target: handle.started.target.clone(),
             status,
-            started_at_unix_ms,
-            finished_at_unix_ms: Some(unix_time_ms()),
-            summary: ScanSummary::default(),
+            started_at: started_at_unix_ms.clone(),
+            finished_at: Some(now_rfc3339()),
+            summary: summary.clone(),
             coverage: outcome.coverage,
-            findings: Vec::new(),
+            scanner_runs: Vec::new(),
+            findings,
             issues: outcome.issues,
         };
 
@@ -229,11 +299,43 @@ fn progress_for(
     }
 }
 
-fn unix_time_ms() -> u128 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis()
+fn now_rfc3339() -> String {
+    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
+    let mut seconds = now;
+    let days = seconds / 86400;
+    seconds %= 86400;
+    let hours = seconds / 3600;
+    seconds %= 3600;
+    let minutes = seconds / 60;
+    let seconds = seconds % 60;
+
+    let mut year = 1970;
+    let mut days_remaining = days;
+    loop {
+        let is_leap = (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0);
+        let days_in_year = if is_leap { 366 } else { 365 };
+        if days_remaining >= days_in_year {
+            days_remaining -= days_in_year;
+            year += 1;
+        } else {
+            break;
+        }
+    }
+
+    let is_leap = (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0);
+    let month_days = [31, if is_leap { 29 } else { 28 }, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+    let mut month = 1;
+    for &d in month_days.iter() {
+        if days_remaining >= d {
+            days_remaining -= d;
+            month += 1;
+        } else {
+            break;
+        }
+    }
+    let day = days_remaining + 1;
+
+    format!("{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z", year, month, day, hours, minutes, seconds)
 }
 
 #[cfg(test)]
@@ -267,6 +369,9 @@ mod tests {
         let handle = manager
             .start(ScanRequest {
                 target_path: root.display().to_string(),
+                scanner_ids: None,
+                exclude_paths: None,
+                include_paths: None,
             })
             .unwrap();
 
@@ -289,17 +394,64 @@ mod tests {
         let first = manager
             .start(ScanRequest {
                 target_path: root.display().to_string(),
+                scanner_ids: None,
+                exclude_paths: None,
+                include_paths: None,
             })
             .unwrap();
         let error = manager
             .start(ScanRequest {
                 target_path: root.display().to_string(),
+                scanner_ids: None,
+                exclude_paths: None,
+                include_paths: None,
             })
             .unwrap_err();
 
         assert_eq!(error.code, "scan_already_running");
         manager.cancel(first.started.scan_id).unwrap();
         manager.run(first, &NoopScanObserver);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn native_scanner_produces_findings() {
+        let root = fixture_path("native");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("private.key"), "-----BEGIN RSA PRIVATE KEY-----\nsecret\n-----END RSA PRIVATE KEY-----").unwrap();
+        fs::write(root.join("config.env"), "password=supersecret\n").unwrap();
+        
+        let manager = ScanManager::new(ScanLimits::default());
+        let handle = manager
+            .start(ScanRequest {
+                target_path: root.display().to_string(),
+                scanner_ids: None,
+                exclude_paths: None,
+                include_paths: None,
+            })
+            .unwrap();
+            
+        let scan_id = handle.started.scan_id;
+        manager.run(handle, &NoopScanObserver);
+        
+        let result = manager.result(scan_id).unwrap();
+        assert_eq!(result.status, ScanStatus::Completed);
+        assert_eq!(result.findings.len(), 2);
+        
+        let private_key_finding = result.findings.iter().find(|f| f.rule_id == "crypto.private_key").unwrap();
+        assert_eq!(private_key_finding.severity, crate::scanner::models::Severity::Critical);
+        
+        let generic_finding = result.findings.iter().find(|f| f.rule_id == "generic.secret").unwrap();
+        assert_eq!(generic_finding.severity, crate::scanner::models::Severity::Medium);
+        
+        let serialized = serde_json::to_string(&result.findings).unwrap();
+        assert!(!serialized.contains("supersecret"));
+        
+        assert_eq!(result.summary.finding_count, 2);
+        assert_eq!(result.summary.critical_count, 1);
+        assert_eq!(result.summary.medium_count, 1);
+        
+        manager.dismiss(scan_id).unwrap();
         fs::remove_dir_all(root).unwrap();
     }
 }

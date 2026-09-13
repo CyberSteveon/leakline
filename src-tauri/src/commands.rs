@@ -1,15 +1,10 @@
-use std::sync::atomic::AtomicBool;
-
 use tauri::{AppHandle, Emitter, State};
 
-use crate::scanner::discovery;
-use crate::scanner::limits::ScanLimits;
 use crate::scanner::manager::{ScanManager, ScanObserver};
 use crate::scanner::models::{
     CancelAcknowledged, ScanCommandError, ScanCompleted, ScanProgress, ScanRequest, ScanResult,
     ScanStarted,
 };
-use crate::scanner::target::validate_target;
 
 #[tauri::command]
 pub fn app_info() -> String {
@@ -19,33 +14,6 @@ pub fn app_info() -> String {
     format!("{}\nVersion: {}", app_name, version)
 }
 
-// Compatibility command for callers that only need the candidate file paths.
-// Unlike the original implementation, discovery errors are returned instead of
-// being silently discarded. New callers should use start_scan and get_scan_result.
-#[tauri::command]
-pub fn scan_directory(path: String) -> Result<Vec<String>, ScanCommandError> {
-    let target = validate_target(&path)?;
-    let cancellation = AtomicBool::new(false);
-    let outcome = discovery::discover(
-        &target.canonical_path,
-        ScanLimits::default(),
-        &cancellation,
-        |_| {},
-    );
-
-    if outcome.issues.is_empty() && !outcome.coverage.candidate_limit_reached {
-        Ok(outcome
-            .files
-            .into_iter()
-            .map(|file| file.absolute_path.to_string_lossy().to_string())
-            .collect())
-    } else {
-        Err(ScanCommandError::new(
-            "directory_discovery_incomplete",
-            "Directory discovery completed with coverage issues. Use start_scan to retrieve the structured result.",
-        ))
-    }
-}
 
 #[tauri::command]
 pub fn start_scan(

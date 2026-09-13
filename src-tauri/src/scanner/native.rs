@@ -120,7 +120,7 @@ impl NativeScanner {
         self.rules.is_empty()
     }
 
-    pub fn scan_file(&self, file: &RuleFile<'_>) -> NativeScanOutcome {
+    pub fn scan_file(&self, file: &RuleFile<'_>, next_finding_id: &mut usize) -> NativeScanOutcome {
         let mut outcome = NativeScanOutcome::default();
 
         for rule in &self.rules {
@@ -132,11 +132,13 @@ impl NativeScanner {
             match rule.evaluate(file) {
                 Ok(matches) => {
                     for (match_index, rule_match) in matches.into_iter().enumerate() {
+                        *next_finding_id += 1;
                         outcome.findings.push(normalize_match(
                             &metadata,
                             file.relative_path(),
                             &rule_match,
                             match_index,
+                            *next_finding_id,
                         ));
                     }
                 }
@@ -149,6 +151,92 @@ impl NativeScanner {
         }
 
         outcome
+    }
+    pub fn default_scanner() -> Self {
+        Self {
+            rules: vec![
+                Box::new(PrivateKeyRule),
+                Box::new(AwsAccessKeyRule),
+                Box::new(GenericSecretRule),
+            ],
+        }
+    }
+}
+
+pub struct PrivateKeyRule;
+impl NativeRule for PrivateKeyRule {
+    fn metadata(&self) -> RuleMetadata {
+        RuleMetadata {
+            id: "crypto.private_key",
+            name: "Private Key",
+            description: "Identifies a private key block.",
+            severity: Severity::Critical,
+            tags: &["crypto", "key"],
+            remediation: Some("Revoke the key and remove it from the repository."),
+        }
+    }
+    fn applies_to(&self, _: &RuleFile<'_>) -> bool { true }
+    fn evaluate(&self, file: &RuleFile<'_>) -> Result<Vec<RuleMatch>, RuleError> {
+        let mut matches = Vec::new();
+        for (i, line) in file.content().lines().enumerate() {
+            if line.contains("-----BEGIN") && line.contains("PRIVATE KEY-----") {
+                matches.push(RuleMatch::new(Some(i as u64 + 1), Some(1), Some(i as u64 + 1), Some(line.len() as u64)));
+            }
+        }
+        Ok(matches)
+    }
+}
+
+pub struct AwsAccessKeyRule;
+impl NativeRule for AwsAccessKeyRule {
+    fn metadata(&self) -> RuleMetadata {
+        RuleMetadata {
+            id: "aws.access_key",
+            name: "AWS Access Key",
+            description: "Identifies an AWS access key.",
+            severity: Severity::High,
+            tags: &["aws", "cloud"],
+            remediation: Some("Revoke the access key in AWS IAM."),
+        }
+    }
+    fn applies_to(&self, _: &RuleFile<'_>) -> bool { true }
+    fn evaluate(&self, file: &RuleFile<'_>) -> Result<Vec<RuleMatch>, RuleError> {
+        let mut matches = Vec::new();
+        for (i, line) in file.content().lines().enumerate() {
+            if line.contains("AKIA") {
+                if let Some(idx) = line.find("AKIA") {
+                    if line[idx..].len() >= 20 {
+                        matches.push(RuleMatch::new(Some(i as u64 + 1), Some(idx as u64 + 1), Some(i as u64 + 1), Some(idx as u64 + 21)));
+                    }
+                }
+            }
+        }
+        Ok(matches)
+    }
+}
+
+pub struct GenericSecretRule;
+impl NativeRule for GenericSecretRule {
+    fn metadata(&self) -> RuleMetadata {
+        RuleMetadata {
+            id: "generic.secret",
+            name: "Generic Secret Assignment",
+            description: "Identifies assignments to variables like password or api_key.",
+            severity: Severity::Medium,
+            tags: &["generic"],
+            remediation: None,
+        }
+    }
+    fn applies_to(&self, _: &RuleFile<'_>) -> bool { true }
+    fn evaluate(&self, file: &RuleFile<'_>) -> Result<Vec<RuleMatch>, RuleError> {
+        let mut matches = Vec::new();
+        for (i, line) in file.content().lines().enumerate() {
+            let lower = line.to_lowercase();
+            if (lower.contains("password=") || lower.contains("api_key=") || lower.contains("secret=")) && !lower.contains("=false") && !lower.contains("=true") {
+                matches.push(RuleMatch::new(Some(i as u64 + 1), Some(1), Some(i as u64 + 1), Some(line.len() as u64)));
+            }
+        }
+        Ok(matches)
     }
 }
 
@@ -163,21 +251,27 @@ fn normalize_match(
     relative_path: &str,
     rule_match: &RuleMatch,
     match_index: usize,
+    finding_sequence: usize,
 ) -> Finding {
+    use std::hash::{Hash, Hasher};
+    use std::collections::hash_map::DefaultHasher;
+
     let location = rule_match.location(relative_path);
-    let identity = format!(
-        "{}:{}:{}:{}:{}:{}:{}",
-        metadata.id,
-        relative_path,
-        location.start_line.unwrap_or_default(),
-        location.start_column.unwrap_or_default(),
-        location.end_line.unwrap_or_default(),
-        location.end_column.unwrap_or_default(),
-        match_index,
-    );
+    
+    let mut hasher = DefaultHasher::new();
+    NATIVE_SCANNER_ID.hash(&mut hasher);
+    metadata.id.hash(&mut hasher);
+    relative_path.hash(&mut hasher);
+    location.start_line.unwrap_or_default().hash(&mut hasher);
+    location.start_column.unwrap_or_default().hash(&mut hasher);
+    location.end_line.unwrap_or_default().hash(&mut hasher);
+    location.end_column.unwrap_or_default().hash(&mut hasher);
+    match_index.hash(&mut hasher);
+    
+    let fingerprint = format!("{:x}", hasher.finish());
 
     Finding {
-        finding_id: format!("native:{identity}"),
+        finding_id: format!("native-{}", finding_sequence),
         scanner_id: NATIVE_SCANNER_ID.to_owned(),
         rule_id: metadata.id.to_owned(),
         title: metadata.name.to_owned(),
@@ -186,7 +280,7 @@ fn normalize_match(
         location,
         tags: metadata.tags.iter().map(|tag| (*tag).to_owned()).collect(),
         remediation: metadata.remediation.map(str::to_owned),
-        fingerprint: format!("native:{identity}"),
+        fingerprint,
     }
 }
 
@@ -291,7 +385,8 @@ mod tests {
         let scanner = NativeScanner::new(vec![Box::new(FirstRule), Box::new(SecondRule)]);
         let file = RuleFile::new("config/.env", "name=test-secret-value");
 
-        let outcome = scanner.scan_file(&file);
+        let mut seq = 0;
+        let outcome = scanner.scan_file(&file, &mut seq);
 
         assert_eq!(outcome.findings.len(), 2);
         assert!(outcome.issues.is_empty());
@@ -306,7 +401,8 @@ mod tests {
         let scanner = NativeScanner::new(vec![Box::new(FirstRule)]);
         let file = RuleFile::new("config/.env", "name=test-secret-value");
 
-        let outcome = scanner.scan_file(&file);
+        let mut seq = 0;
+        let outcome = scanner.scan_file(&file, &mut seq);
         let serialized = serde_json::to_string(&outcome.findings).unwrap();
 
         assert_eq!(outcome.findings.len(), 1);
@@ -319,7 +415,8 @@ mod tests {
         let scanner = NativeScanner::new(vec![Box::new(FailingRule)]);
         let file = RuleFile::new("config/.env", "name=test-secret-value");
 
-        let outcome = scanner.scan_file(&file);
+        let mut seq = 0;
+        let outcome = scanner.scan_file(&file, &mut seq);
 
         assert!(outcome.findings.is_empty());
         assert_eq!(outcome.issues.len(), 1);
