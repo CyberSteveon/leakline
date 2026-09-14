@@ -1,12 +1,41 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+#[cfg(unix)]
+use std::os::unix::fs::MetadataExt;
+#[cfg(windows)]
+use std::os::windows::fs::MetadataExt;
+
 use super::models::{ScanCommandError, ScanTargetSummary};
 
 #[derive(Debug, Clone)]
 pub struct ValidatedTarget {
     pub canonical_path: PathBuf,
     pub summary: ScanTargetSummary,
+}
+
+fn is_same_file(meta1: &fs::Metadata, meta2: &fs::Metadata) -> bool {
+    #[cfg(unix)]
+    {
+        meta1.dev() == meta2.dev() && meta1.ino() == meta2.ino()
+    }
+    #[cfg(windows)]
+    {
+        if let (Some(vol1), Some(vol2), Some(idx1), Some(idx2)) = (
+            meta1.volume_serial_number(),
+            meta2.volume_serial_number(),
+            meta1.file_index(),
+            meta2.file_index(),
+        ) {
+            vol1 == vol2 && idx1 == idx2
+        } else {
+            false
+        }
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        false
+    }
 }
 
 pub fn validate_target(target_path: &str) -> Result<ValidatedTarget, ScanCommandError> {
@@ -18,26 +47,6 @@ pub fn validate_target(target_path: &str) -> Result<ValidatedTarget, ScanCommand
     }
 
     let submitted_path = Path::new(target_path);
-    let metadata = fs::symlink_metadata(submitted_path).map_err(|_| {
-        ScanCommandError::new(
-            "target_unavailable",
-            "The selected scan target could not be accessed.",
-        )
-    })?;
-
-    if metadata.file_type().is_symlink() {
-        return Err(ScanCommandError::new(
-            "symlink_target",
-            "Symbolic-link targets are not supported.",
-        ));
-    }
-
-    if !metadata.is_dir() {
-        return Err(ScanCommandError::new(
-            "invalid_target_type",
-            "The scan target must be a directory.",
-        ));
-    }
 
     let canonical_path = fs::canonicalize(submitted_path).map_err(|_| {
         ScanCommandError::new(
@@ -45,6 +54,41 @@ pub fn validate_target(target_path: &str) -> Result<ValidatedTarget, ScanCommand
             "The selected scan target could not be resolved.",
         )
     })?;
+
+    let submitted_metadata = fs::symlink_metadata(submitted_path).map_err(|_| {
+        ScanCommandError::new(
+            "target_unavailable",
+            "The selected scan target could not be accessed.",
+        )
+    })?;
+
+    let canonical_metadata = fs::symlink_metadata(&canonical_path).map_err(|_| {
+        ScanCommandError::new(
+            "target_unavailable",
+            "The selected scan target could not be accessed.",
+        )
+    })?;
+
+    if submitted_metadata.file_type().is_symlink() {
+        return Err(ScanCommandError::new(
+            "symlink_target",
+            "Symbolic-link targets are not supported.",
+        ));
+    }
+
+    if !is_same_file(&submitted_metadata, &canonical_metadata) {
+        return Err(ScanCommandError::new(
+            "target_unavailable",
+            "The scan target was modified during validation.",
+        ));
+    }
+
+    if !canonical_metadata.is_dir() {
+        return Err(ScanCommandError::new(
+            "invalid_target_type",
+            "The scan target must be a directory.",
+        ));
+    }
 
     let display_path = canonical_path.to_str().map(str::to_owned).ok_or_else(|| {
         ScanCommandError::new(
