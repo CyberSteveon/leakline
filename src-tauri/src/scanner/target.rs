@@ -14,6 +14,24 @@ pub struct ValidatedTarget {
     pub summary: ScanTargetSummary,
 }
 
+#[cfg(windows)]
+pub fn normalize_path(path_str: &str) -> String {
+    let mut s = path_str.replace('\\', "/");
+    if s.starts_with("//?/") {
+        if s.starts_with("//?/UNC/") {
+            s = format!("//{}", &s[8..]);
+        } else {
+            s = s[4..].to_string();
+        }
+    }
+    s
+}
+
+#[cfg(not(windows))]
+pub fn normalize_path(path_str: &str) -> String {
+    path_str.to_string()
+}
+
 fn is_same_file(meta1: &fs::Metadata, meta2: &fs::Metadata) -> bool {
     #[cfg(unix)]
     {
@@ -90,12 +108,14 @@ pub fn validate_target(target_path: &str) -> Result<ValidatedTarget, ScanCommand
         ));
     }
 
-    let display_path = canonical_path.to_str().map(str::to_owned).ok_or_else(|| {
+    let display_path_raw = canonical_path.to_str().map(str::to_owned).ok_or_else(|| {
         ScanCommandError::new(
             "unsupported_target_path",
             "The selected scan target path cannot be represented safely.",
         )
     })?;
+
+    let display_path = normalize_path(&display_path_raw);
 
     Ok(ValidatedTarget {
         canonical_path,
@@ -106,10 +126,11 @@ pub fn validate_target(target_path: &str) -> Result<ValidatedTarget, ScanCommand
 pub fn relative_path_display(root: &Path, path: &Path) -> String {
     let relative_path = path.strip_prefix(root).unwrap_or(path);
 
-    relative_path
+    let raw = relative_path
         .to_str()
         .map(str::to_owned)
-        .unwrap_or_else(|| format!("{:?}", relative_path))
+        .unwrap_or_else(|| relative_path.to_string_lossy().into_owned());
+    normalize_path(&raw)
 }
 
 #[cfg(test)]
@@ -118,7 +139,7 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use super::validate_target;
+    use super::{validate_target, normalize_path};
 
     static NEXT_FIXTURE_ID: AtomicUsize = AtomicUsize::new(0);
 
@@ -153,7 +174,7 @@ mod tests {
         assert!(target.canonical_path.is_absolute());
         assert_eq!(
             target.summary.display_path,
-            target.canonical_path.display().to_string()
+            normalize_path(&target.canonical_path.display().to_string())
         );
         fs::remove_dir_all(directory_path).unwrap();
     }
