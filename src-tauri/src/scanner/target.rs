@@ -139,7 +139,7 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use super::{validate_target, normalize_path};
+    use super::{normalize_path, validate_target};
 
     static NEXT_FIXTURE_ID: AtomicUsize = AtomicUsize::new(0);
 

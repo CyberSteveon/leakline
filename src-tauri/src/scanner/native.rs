@@ -1,6 +1,4 @@
-use super::models::{
-    Finding, FindingLocation, IssueSeverity, IssueStage, ScanIssue, Severity,
-};
+use super::models::{Finding, FindingLocation, IssueSeverity, IssueStage, ScanIssue, Severity};
 
 const NATIVE_SCANNER_ID: &str = "native";
 
@@ -175,12 +173,19 @@ impl NativeRule for PrivateKeyRule {
             remediation: Some("Revoke the key and remove it from the repository."),
         }
     }
-    fn applies_to(&self, _: &RuleFile<'_>) -> bool { true }
+    fn applies_to(&self, _: &RuleFile<'_>) -> bool {
+        true
+    }
     fn evaluate(&self, file: &RuleFile<'_>) -> Result<Vec<RuleMatch>, RuleError> {
         let mut matches = Vec::new();
         for (i, line) in file.content().lines().enumerate() {
             if line.contains("-----BEGIN") && line.contains("PRIVATE KEY-----") {
-                matches.push(RuleMatch::new(Some(i as u64 + 1), Some(1), Some(i as u64 + 1), Some(line.len() as u64)));
+                matches.push(RuleMatch::new(
+                    Some(i as u64 + 1),
+                    Some(1),
+                    Some(i as u64 + 1),
+                    Some(line.len() as u64),
+                ));
             }
         }
         Ok(matches)
@@ -199,14 +204,21 @@ impl NativeRule for AwsAccessKeyRule {
             remediation: Some("Revoke the access key in AWS IAM."),
         }
     }
-    fn applies_to(&self, _: &RuleFile<'_>) -> bool { true }
+    fn applies_to(&self, _: &RuleFile<'_>) -> bool {
+        true
+    }
     fn evaluate(&self, file: &RuleFile<'_>) -> Result<Vec<RuleMatch>, RuleError> {
         let mut matches = Vec::new();
         for (i, line) in file.content().lines().enumerate() {
             if line.contains("AKIA") {
                 if let Some(idx) = line.find("AKIA") {
                     if line[idx..].len() >= 20 {
-                        matches.push(RuleMatch::new(Some(i as u64 + 1), Some(idx as u64 + 1), Some(i as u64 + 1), Some(idx as u64 + 21)));
+                        matches.push(RuleMatch::new(
+                            Some(i as u64 + 1),
+                            Some(idx as u64 + 1),
+                            Some(i as u64 + 1),
+                            Some(idx as u64 + 21),
+                        ));
                     }
                 }
             }
@@ -227,13 +239,25 @@ impl NativeRule for GenericSecretRule {
             remediation: None,
         }
     }
-    fn applies_to(&self, _: &RuleFile<'_>) -> bool { true }
+    fn applies_to(&self, _: &RuleFile<'_>) -> bool {
+        true
+    }
     fn evaluate(&self, file: &RuleFile<'_>) -> Result<Vec<RuleMatch>, RuleError> {
         let mut matches = Vec::new();
         for (i, line) in file.content().lines().enumerate() {
             let lower = line.to_lowercase();
-            if (lower.contains("password=") || lower.contains("api_key=") || lower.contains("secret=")) && !lower.contains("=false") && !lower.contains("=true") {
-                matches.push(RuleMatch::new(Some(i as u64 + 1), Some(1), Some(i as u64 + 1), Some(line.len() as u64)));
+            if (lower.contains("password=")
+                || lower.contains("api_key=")
+                || lower.contains("secret="))
+                && !lower.contains("=false")
+                && !lower.contains("=true")
+            {
+                matches.push(RuleMatch::new(
+                    Some(i as u64 + 1),
+                    Some(1),
+                    Some(i as u64 + 1),
+                    Some(line.len() as u64),
+                ));
             }
         }
         Ok(matches)
@@ -253,11 +277,11 @@ fn normalize_match(
     match_index: usize,
     finding_sequence: usize,
 ) -> Finding {
-    use std::hash::{Hash, Hasher};
     use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
 
     let location = rule_match.location(relative_path);
-    
+
     let mut hasher = DefaultHasher::new();
     NATIVE_SCANNER_ID.hash(&mut hasher);
     metadata.id.hash(&mut hasher);
@@ -267,7 +291,7 @@ fn normalize_match(
     location.end_line.unwrap_or_default().hash(&mut hasher);
     location.end_column.unwrap_or_default().hash(&mut hasher);
     match_index.hash(&mut hasher);
-    
+
     let fingerprint = format!("{:x}", hasher.finish());
 
     Finding {
@@ -302,9 +326,7 @@ fn normalize_rule_error(
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        NativeRule, NativeScanner, RuleError, RuleFile, RuleMatch, RuleMetadata,
-    };
+    use super::{NativeRule, NativeScanner, RuleError, RuleFile, RuleMatch, RuleMetadata};
     use crate::scanner::models::{IssueStage, Severity};
 
     struct FirstRule;

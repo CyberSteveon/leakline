@@ -1,6 +1,6 @@
 mod commands;
-pub mod scanner;
 pub mod dependencies;
+pub mod scanner;
 
 pub use scanner::policy::{is_allowed_extension, is_allowed_filename};
 
@@ -9,6 +9,7 @@ pub use scanner::policy::{is_allowed_extension, is_allowed_filename};
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .manage(scanner::manager::ScanManager::default())
         .setup(|app| {
             if cfg!(debug_assertions) {
