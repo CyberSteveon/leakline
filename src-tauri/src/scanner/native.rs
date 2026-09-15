@@ -156,8 +156,107 @@ impl NativeScanner {
                 Box::new(PrivateKeyRule),
                 Box::new(AwsAccessKeyRule),
                 Box::new(GenericSecretRule),
+                Box::new(AdDomainAdminRule),
+                Box::new(SccmAdminRule),
+                Box::new(SapRfcRule),
             ],
         }
+    }
+}
+
+pub struct AdDomainAdminRule;
+impl NativeRule for AdDomainAdminRule {
+    fn metadata(&self) -> RuleMetadata {
+        RuleMetadata {
+            id: "ad.domain_admin",
+            name: "Active Directory Credentials",
+            description: "Identifies hardcoded Active Directory credentials or LDAP connection strings.",
+            severity: Severity::High,
+            tags: &["ad", "ldap", "credentials"],
+            remediation: Some("Remove hardcoded AD credentials and use secure vaults or environment variables."),
+        }
+    }
+    fn applies_to(&self, _: &RuleFile<'_>) -> bool {
+        true
+    }
+    fn evaluate(&self, file: &RuleFile<'_>) -> Result<Vec<RuleMatch>, RuleError> {
+        let mut matches = Vec::new();
+        for (i, line) in file.content().lines().enumerate() {
+            let lower = line.to_lowercase();
+            if lower.contains("ldap://") || lower.contains("samaccountname") || lower.contains("domain admins") {
+                matches.push(RuleMatch::new(
+                    Some(i as u64 + 1),
+                    Some(1),
+                    Some(i as u64 + 1),
+                    Some(line.len() as u64),
+                ));
+            }
+        }
+        Ok(matches)
+    }
+}
+
+pub struct SccmAdminRule;
+impl NativeRule for SccmAdminRule {
+    fn metadata(&self) -> RuleMetadata {
+        RuleMetadata {
+            id: "sccm.admin",
+            name: "SCCM Network Access Accounts",
+            description: "Identifies hardcoded SCCM Network Access Accounts or configuration files.",
+            severity: Severity::High,
+            tags: &["sccm", "admin"],
+            remediation: Some("Remove hardcoded SCCM accounts and use secure configurations."),
+        }
+    }
+    fn applies_to(&self, _: &RuleFile<'_>) -> bool {
+        true
+    }
+    fn evaluate(&self, file: &RuleFile<'_>) -> Result<Vec<RuleMatch>, RuleError> {
+        let mut matches = Vec::new();
+        for (i, line) in file.content().lines().enumerate() {
+            let lower = line.to_lowercase();
+            if lower.contains("sms_sitesystemtositeserverconnection") || lower.contains("smsadminui.log") {
+                matches.push(RuleMatch::new(
+                    Some(i as u64 + 1),
+                    Some(1),
+                    Some(i as u64 + 1),
+                    Some(line.len() as u64),
+                ));
+            }
+        }
+        Ok(matches)
+    }
+}
+
+pub struct SapRfcRule;
+impl NativeRule for SapRfcRule {
+    fn metadata(&self) -> RuleMetadata {
+        RuleMetadata {
+            id: "sap.rfc",
+            name: "SAP RFC Credentials",
+            description: "Identifies hardcoded SAP RFC credentials or JCo properties.",
+            severity: Severity::High,
+            tags: &["sap", "rfc", "jco"],
+            remediation: Some("Remove hardcoded SAP credentials and configure secure storage."),
+        }
+    }
+    fn applies_to(&self, _: &RuleFile<'_>) -> bool {
+        true
+    }
+    fn evaluate(&self, file: &RuleFile<'_>) -> Result<Vec<RuleMatch>, RuleError> {
+        let mut matches = Vec::new();
+        for (i, line) in file.content().lines().enumerate() {
+            let lower = line.to_lowercase();
+            if lower.contains("jco.client.passwd") || lower.contains("ashost=") || lower.contains("sysnr=") {
+                matches.push(RuleMatch::new(
+                    Some(i as u64 + 1),
+                    Some(1),
+                    Some(i as u64 + 1),
+                    Some(line.len() as u64),
+                ));
+            }
+        }
+        Ok(matches)
     }
 }
 
