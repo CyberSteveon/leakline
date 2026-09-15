@@ -1,5 +1,6 @@
 mod commands;
 pub mod scanner;
+pub mod dependencies;
 
 pub use scanner::policy::{is_allowed_extension, is_allowed_filename};
 
@@ -24,7 +25,9 @@ pub fn run() {
             commands::start_scan,
             commands::cancel_scan,
             commands::get_scan_result,
-            commands::dismiss_scan_result
+            commands::dismiss_scan_result,
+            commands::get_dependency_status,
+            commands::install_dependency
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

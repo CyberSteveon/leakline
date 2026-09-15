@@ -54,8 +54,8 @@ npm run tauri dev
 
 ```powershell (windows)
 # Clone the repo
-git clone https://github.com/CyberSteveon/leaklin.git
-Set-Location leaklin
+git clone https://github.com/CyberSteveon/leakline.git
+Set-Location leakline
 
 # Install frontend dependencies
 npm install
@@ -68,17 +68,20 @@ npm run tauri dev
 
 ## Project Structure
 
-
+```text
 leakline/
 ├── src/                  # React frontend
+├── __tests__/            # Frontend unit tests
 ├── src-tauri/
 │   ├── src/
-│   │   ├── main.rs       # Entry point only
-│   │   └── lib.rs        # All commands, structs, and Tauri setup
+│   │   ├── scanner/      # Core scanning engine module
+│   │   ├── commands.rs   # Tauri commands
+│   │   ├── lib.rs        # App setup and routing
+│   │   └── main.rs       # Entry point
 │   ├── Cargo.toml
 │   └── Cargo.lock
 └── package.json
-
+```
 
 ---
 

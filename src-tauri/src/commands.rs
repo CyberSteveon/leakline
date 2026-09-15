@@ -5,6 +5,7 @@ use crate::scanner::models::{
     CancelAcknowledged, ScanCommandError, ScanCompleted, ScanProgress, ScanRequest, ScanResult,
     ScanStarted,
 };
+use crate::dependencies::{get_status, install, DependencyStatus};
 
 #[tauri::command]
 pub fn app_info() -> String {
@@ -12,6 +13,16 @@ pub fn app_info() -> String {
     let version = "0.1.0";
 
     format!("{}\nVersion: {}", app_name, version)
+}
+
+#[tauri::command]
+pub fn get_dependency_status(app: AppHandle) -> Result<DependencyStatus, String> {
+    get_status(&app)
+}
+
+#[tauri::command]
+pub fn install_dependency(app: AppHandle) -> Result<(), String> {
+    install(&app)
 }
 
 
@@ -24,10 +35,10 @@ pub fn start_scan(
     let manager = manager.inner().clone();
     let handle = manager.start(request)?;
     let started = handle.started.clone();
-    let observer = TauriScanObserver { app };
+    let observer = TauriScanObserver { app: app.clone() };
 
     tauri::async_runtime::spawn_blocking(move || {
-        manager.run(handle, &observer);
+        manager.run(handle, &observer, app);
     });
 
     Ok(started)
