@@ -5,3 +5,5 @@ pub mod models;
 pub mod native;
 pub mod policy;
 pub mod target;
+pub mod gitleaks;
+pub mod semgrep;

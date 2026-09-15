@@ -1,3 +1,4 @@
+use tauri::Manager;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -93,7 +94,7 @@ impl ScanManager {
         })
     }
 
-    pub fn run(&self, handle: ScanHandle, observer: &dyn ScanObserver) {
+    pub fn run(&self, handle: ScanHandle, observer: &dyn ScanObserver, app: tauri::AppHandle) {
         let scan_id = handle.started.scan_id;
         let started_at_unix_ms = now_rfc3339();
         observer.progress(progress_for(
@@ -181,6 +182,83 @@ impl ScanManager {
             }
         }
         
+
+        let dep_status = crate::dependencies::get_status(&app).unwrap_or_default();
+        let mut scanner_runs = Vec::new();
+        
+        let native_status = if limit_reached { ScanStatus::Partial } else { ScanStatus::Completed };
+        scanner_runs.push(crate::scanner::models::ScannerRunSummary {
+            scanner_id: "native".to_string(),
+            status: native_status,
+            findings_count: findings.len() as u64,
+            issues_count: outcome.issues.len() as u64,
+            duration_ms: 0,
+        });
+
+        if let Ok(app_data_dir) = app.path().app_data_dir() {
+            let target_path = std::path::Path::new(&handle.target.canonical_path);
+            
+            if dep_status.gitleaks_installed && !handle.cancellation.load(Ordering::Relaxed) {
+                observer.progress(progress_for(
+                    scan_id,
+                    ScanPhase::ScanningGitleaks,
+                    &outcome.coverage,
+                    processed_files,
+                    outcome.issues.len() as u64,
+                ));
+                let gitleaks_bin = app_data_dir.join(if cfg!(windows) { "gitleaks.exe" } else { "gitleaks" });
+                let start_time = std::time::Instant::now();
+                let (gl_findings, gl_issues) = crate::scanner::gitleaks::run_gitleaks(target_path, &gitleaks_bin);
+                let duration_ms = start_time.elapsed().as_millis();
+                
+                let issues_count = gl_issues.len() as u64;
+                let findings_count = gl_findings.len() as u64;
+                
+                findings.extend(gl_findings);
+                outcome.issues.extend(gl_issues);
+                
+                let status = if issues_count > 0 { ScanStatus::CompletedWithIssues } else { ScanStatus::Completed };
+                
+                scanner_runs.push(crate::scanner::models::ScannerRunSummary {
+                    scanner_id: "gitleaks".to_string(),
+                    status,
+                    findings_count,
+                    issues_count,
+                    duration_ms,
+                });
+            }
+            
+            if dep_status.semgrep_installed && !handle.cancellation.load(Ordering::Relaxed) {
+                observer.progress(progress_for(
+                    scan_id,
+                    ScanPhase::ScanningSemgrep,
+                    &outcome.coverage,
+                    processed_files,
+                    outcome.issues.len() as u64,
+                ));
+                let semgrep_bin = app_data_dir.join(if cfg!(windows) { "semgrep.exe" } else { "semgrep" });
+                let start_time = std::time::Instant::now();
+                let (sg_findings, sg_issues) = crate::scanner::semgrep::run_semgrep(target_path, &semgrep_bin);
+                let duration_ms = start_time.elapsed().as_millis();
+                
+                let issues_count = sg_issues.len() as u64;
+                let findings_count = sg_findings.len() as u64;
+                
+                findings.extend(sg_findings);
+                outcome.issues.extend(sg_issues);
+                
+                let status = if issues_count > 0 { ScanStatus::CompletedWithIssues } else { ScanStatus::Completed };
+                
+                scanner_runs.push(crate::scanner::models::ScannerRunSummary {
+                    scanner_id: "semgrep".to_string(),
+                    status,
+                    findings_count,
+                    issues_count,
+                    duration_ms,
+                });
+            }
+        }
+        
         let mut summary = ScanSummary {
             finding_count: findings.len() as u64,
             ..Default::default()
@@ -213,7 +291,7 @@ impl ScanManager {
             finished_at: Some(now_rfc3339()),
             summary: summary.clone(),
             coverage: outcome.coverage,
-            scanner_runs: Vec::new(),
+            scanner_runs,
             findings,
             issues: outcome.issues,
         };

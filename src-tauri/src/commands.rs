@@ -35,10 +35,10 @@ pub fn start_scan(
     let manager = manager.inner().clone();
     let handle = manager.start(request)?;
     let started = handle.started.clone();
-    let observer = TauriScanObserver { app };
+    let observer = TauriScanObserver { app: app.clone() };
 
     tauri::async_runtime::spawn_blocking(move || {
-        manager.run(handle, &observer);
+        manager.run(handle, &observer, app);
     });
 
     Ok(started)
