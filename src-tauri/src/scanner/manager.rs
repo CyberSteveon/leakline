@@ -95,7 +95,7 @@ impl ScanManager {
         })
     }
 
-    pub fn run(&self, handle: ScanHandle, observer: &dyn ScanObserver, app: tauri::AppHandle) {
+    pub fn run(&self, handle: ScanHandle, observer: &dyn ScanObserver, app: Option<tauri::AppHandle>) {
         let scan_id = handle.started.scan_id;
         let started_at_unix_ms = now_rfc3339();
         observer.progress(progress_for(
@@ -184,7 +184,11 @@ impl ScanManager {
             }
         }
 
-        let dep_status = crate::dependencies::get_status(&app).unwrap_or_default();
+        let dep_status = if let Some(app_handle) = app.as_ref() {
+            crate::dependencies::get_status(app_handle).unwrap_or_default()
+        } else {
+            Default::default()
+        };
         let mut scanner_runs = Vec::new();
 
         let native_status = if limit_reached {
@@ -200,7 +204,7 @@ impl ScanManager {
             duration_ms: 0,
         });
 
-        if let Ok(app_data_dir) = app.path().app_data_dir() {
+        if let Some(app_data_dir) = app.as_ref().and_then(|a| a.path().app_data_dir().ok()) {
             let target_path = std::path::Path::new(&handle.target.canonical_path);
 
             if dep_status.gitleaks_installed && !handle.cancellation.load(Ordering::Relaxed) {
@@ -497,7 +501,7 @@ mod tests {
 
         manager.cancel(handle.started.scan_id).unwrap();
         let scan_id = handle.started.scan_id;
-        manager.run(handle, &NoopScanObserver);
+        manager.run(handle, &NoopScanObserver, None);
 
         let result = manager.result(scan_id).unwrap();
         assert_eq!(result.status, ScanStatus::Cancelled);
@@ -530,7 +534,7 @@ mod tests {
 
         assert_eq!(error.code, "scan_already_running");
         manager.cancel(first.started.scan_id).unwrap();
-        manager.run(first, &NoopScanObserver);
+        manager.run(first, &NoopScanObserver, None);
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -556,7 +560,7 @@ mod tests {
             .unwrap();
 
         let scan_id = handle.started.scan_id;
-        manager.run(handle, &NoopScanObserver);
+        manager.run(handle, &NoopScanObserver, None);
 
         let result = manager.result(scan_id).unwrap();
         assert_eq!(result.status, ScanStatus::Completed);
