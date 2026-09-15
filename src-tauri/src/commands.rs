@@ -42,7 +42,7 @@ pub fn start_scan(
     let observer = TauriScanObserver { app: app.clone() };
 
     tauri::async_runtime::spawn_blocking(move || {
-        manager.run(handle, &observer, app);
+        manager.run(handle, &observer, Some(app));
     });
 
     Ok(started)
