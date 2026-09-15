@@ -1,15 +1,16 @@
-use tauri::Manager;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
+use tauri::Manager;
 
 use super::discovery;
 use super::limits::ScanLimits;
 use super::models::{
-    CancelAcknowledged, CoverageSummary, ScanCommandError, ScanCompleted, ScanPhase, ScanProgress,
-    ScanRequest, ScanResult, ScanStarted, ScanStatus, ScanSummary, ScanIssue, IssueStage, IssueSeverity
+    CancelAcknowledged, CoverageSummary, IssueSeverity, IssueStage, ScanCommandError,
+    ScanCompleted, ScanIssue, ScanPhase, ScanProgress, ScanRequest, ScanResult, ScanStarted,
+    ScanStatus, ScanSummary,
 };
 use super::target::{validate_target, ValidatedTarget};
 
@@ -164,13 +165,14 @@ impl ScanManager {
 
             if let Ok(content) = std::fs::read_to_string(&file.absolute_path) {
                 total_bytes_read += content.len() as u64;
-                let rule_file = crate::scanner::native::RuleFile::new(&file.relative_path, &content);
+                let rule_file =
+                    crate::scanner::native::RuleFile::new(&file.relative_path, &content);
                 let native_outcome = native_scanner.scan_file(&rule_file, &mut next_finding_id);
                 findings.extend(native_outcome.findings);
                 outcome.issues.extend(native_outcome.issues);
             }
             processed_files += 1;
-            
+
             if processed_files == 1 || processed_files % 100 == 0 {
                 observer.progress(progress_for(
                     scan_id,
@@ -181,12 +183,15 @@ impl ScanManager {
                 ));
             }
         }
-        
 
         let dep_status = crate::dependencies::get_status(&app).unwrap_or_default();
         let mut scanner_runs = Vec::new();
-        
-        let native_status = if limit_reached { ScanStatus::Partial } else { ScanStatus::Completed };
+
+        let native_status = if limit_reached {
+            ScanStatus::Partial
+        } else {
+            ScanStatus::Completed
+        };
         scanner_runs.push(crate::scanner::models::ScannerRunSummary {
             scanner_id: "native".to_string(),
             status: native_status,
@@ -197,7 +202,7 @@ impl ScanManager {
 
         if let Ok(app_data_dir) = app.path().app_data_dir() {
             let target_path = std::path::Path::new(&handle.target.canonical_path);
-            
+
             if dep_status.gitleaks_installed && !handle.cancellation.load(Ordering::Relaxed) {
                 observer.progress(progress_for(
                     scan_id,
@@ -206,19 +211,28 @@ impl ScanManager {
                     processed_files,
                     outcome.issues.len() as u64,
                 ));
-                let gitleaks_bin = app_data_dir.join(if cfg!(windows) { "gitleaks.exe" } else { "gitleaks" });
+                let gitleaks_bin = app_data_dir.join(if cfg!(windows) {
+                    "gitleaks.exe"
+                } else {
+                    "gitleaks"
+                });
                 let start_time = std::time::Instant::now();
-                let (gl_findings, gl_issues) = crate::scanner::gitleaks::run_gitleaks(target_path, &gitleaks_bin);
+                let (gl_findings, gl_issues) =
+                    crate::scanner::gitleaks::run_gitleaks(target_path, &gitleaks_bin);
                 let duration_ms = start_time.elapsed().as_millis();
-                
+
                 let issues_count = gl_issues.len() as u64;
                 let findings_count = gl_findings.len() as u64;
-                
+
                 findings.extend(gl_findings);
                 outcome.issues.extend(gl_issues);
-                
-                let status = if issues_count > 0 { ScanStatus::CompletedWithIssues } else { ScanStatus::Completed };
-                
+
+                let status = if issues_count > 0 {
+                    ScanStatus::CompletedWithIssues
+                } else {
+                    ScanStatus::Completed
+                };
+
                 scanner_runs.push(crate::scanner::models::ScannerRunSummary {
                     scanner_id: "gitleaks".to_string(),
                     status,
@@ -227,7 +241,7 @@ impl ScanManager {
                     duration_ms,
                 });
             }
-            
+
             if dep_status.semgrep_installed && !handle.cancellation.load(Ordering::Relaxed) {
                 observer.progress(progress_for(
                     scan_id,
@@ -236,19 +250,28 @@ impl ScanManager {
                     processed_files,
                     outcome.issues.len() as u64,
                 ));
-                let semgrep_bin = app_data_dir.join(if cfg!(windows) { "semgrep.exe" } else { "semgrep" });
+                let semgrep_bin = app_data_dir.join(if cfg!(windows) {
+                    "semgrep.exe"
+                } else {
+                    "semgrep"
+                });
                 let start_time = std::time::Instant::now();
-                let (sg_findings, sg_issues) = crate::scanner::semgrep::run_semgrep(target_path, &semgrep_bin);
+                let (sg_findings, sg_issues) =
+                    crate::scanner::semgrep::run_semgrep(target_path, &semgrep_bin);
                 let duration_ms = start_time.elapsed().as_millis();
-                
+
                 let issues_count = sg_issues.len() as u64;
                 let findings_count = sg_findings.len() as u64;
-                
+
                 findings.extend(sg_findings);
                 outcome.issues.extend(sg_issues);
-                
-                let status = if issues_count > 0 { ScanStatus::CompletedWithIssues } else { ScanStatus::Completed };
-                
+
+                let status = if issues_count > 0 {
+                    ScanStatus::CompletedWithIssues
+                } else {
+                    ScanStatus::Completed
+                };
+
                 scanner_runs.push(crate::scanner::models::ScannerRunSummary {
                     scanner_id: "semgrep".to_string(),
                     status,
@@ -258,7 +281,7 @@ impl ScanManager {
                 });
             }
         }
-        
+
         let mut summary = ScanSummary {
             finding_count: findings.len() as u64,
             ..Default::default()
@@ -378,7 +401,10 @@ fn progress_for(
 }
 
 fn now_rfc3339() -> String {
-    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
     let mut seconds = now;
     let days = seconds / 86400;
     seconds %= 86400;
@@ -401,7 +427,20 @@ fn now_rfc3339() -> String {
     }
 
     let is_leap = (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0);
-    let month_days = [31, if is_leap { 29 } else { 28 }, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+    let month_days = [
+        31,
+        if is_leap { 29 } else { 28 },
+        31,
+        30,
+        31,
+        30,
+        31,
+        31,
+        30,
+        31,
+        30,
+        31,
+    ];
     let mut month = 1;
     for &d in month_days.iter() {
         if days_remaining >= d {
@@ -413,7 +452,10 @@ fn now_rfc3339() -> String {
     }
     let day = days_remaining + 1;
 
-    format!("{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z", year, month, day, hours, minutes, seconds)
+    format!(
+        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
+        year, month, day, hours, minutes, seconds
+    )
 }
 
 #[cfg(test)]
@@ -496,9 +538,13 @@ mod tests {
     fn native_scanner_produces_findings() {
         let root = fixture_path("native");
         fs::create_dir_all(&root).unwrap();
-        fs::write(root.join("private.key"), "-----BEGIN RSA PRIVATE KEY-----\nsecret\n-----END RSA PRIVATE KEY-----").unwrap();
+        fs::write(
+            root.join("private.key"),
+            "-----BEGIN RSA PRIVATE KEY-----\nsecret\n-----END RSA PRIVATE KEY-----",
+        )
+        .unwrap();
         fs::write(root.join("config.env"), "password=supersecret\n").unwrap();
-        
+
         let manager = ScanManager::new(ScanLimits::default());
         let handle = manager
             .start(ScanRequest {
@@ -508,27 +554,41 @@ mod tests {
                 include_paths: None,
             })
             .unwrap();
-            
+
         let scan_id = handle.started.scan_id;
         manager.run(handle, &NoopScanObserver);
-        
+
         let result = manager.result(scan_id).unwrap();
         assert_eq!(result.status, ScanStatus::Completed);
         assert_eq!(result.findings.len(), 2);
-        
-        let private_key_finding = result.findings.iter().find(|f| f.rule_id == "crypto.private_key").unwrap();
-        assert_eq!(private_key_finding.severity, crate::scanner::models::Severity::Critical);
-        
-        let generic_finding = result.findings.iter().find(|f| f.rule_id == "generic.secret").unwrap();
-        assert_eq!(generic_finding.severity, crate::scanner::models::Severity::Medium);
-        
+
+        let private_key_finding = result
+            .findings
+            .iter()
+            .find(|f| f.rule_id == "crypto.private_key")
+            .unwrap();
+        assert_eq!(
+            private_key_finding.severity,
+            crate::scanner::models::Severity::Critical
+        );
+
+        let generic_finding = result
+            .findings
+            .iter()
+            .find(|f| f.rule_id == "generic.secret")
+            .unwrap();
+        assert_eq!(
+            generic_finding.severity,
+            crate::scanner::models::Severity::Medium
+        );
+
         let serialized = serde_json::to_string(&result.findings).unwrap();
         assert!(!serialized.contains("supersecret"));
-        
+
         assert_eq!(result.summary.finding_count, 2);
         assert_eq!(result.summary.critical_count, 1);
         assert_eq!(result.summary.medium_count, 1);
-        
+
         manager.dismiss(scan_id).unwrap();
         fs::remove_dir_all(root).unwrap();
     }

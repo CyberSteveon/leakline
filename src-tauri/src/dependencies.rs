@@ -1,8 +1,8 @@
+use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Manager};
-use serde::{Serialize, Deserialize};
 
 #[derive(Serialize, Deserialize, Default)]
 pub struct DependencyStatus {
@@ -33,8 +33,16 @@ fn get_app_data_dir(app: &AppHandle) -> Result<PathBuf, String> {
 
 pub fn get_status(app: &AppHandle) -> Result<DependencyStatus, String> {
     let data_dir = get_app_data_dir(app)?;
-    let gitleaks_path = data_dir.join(if cfg!(windows) { "gitleaks.exe" } else { "gitleaks" });
-    let semgrep_path = data_dir.join(if cfg!(windows) { "semgrep.exe" } else { "semgrep" });
+    let gitleaks_path = data_dir.join(if cfg!(windows) {
+        "gitleaks.exe"
+    } else {
+        "gitleaks"
+    });
+    let semgrep_path = data_dir.join(if cfg!(windows) {
+        "semgrep.exe"
+    } else {
+        "semgrep"
+    });
 
     Ok(DependencyStatus {
         gitleaks_installed: gitleaks_path.exists(),
@@ -70,9 +78,13 @@ fn install_gitleaks(data_dir: &Path) -> Result<(), String> {
         extract_tar_gz(&archive_path, data_dir)?;
     }
 
-    let bin_name = if cfg!(windows) { "gitleaks.exe" } else { "gitleaks" };
+    let bin_name = if cfg!(windows) {
+        "gitleaks.exe"
+    } else {
+        "gitleaks"
+    };
     let bin_path = data_dir.join(bin_name);
-    
+
     // Ensure executable permissions on Unix
     #[cfg(unix)]
     {
@@ -91,17 +103,25 @@ fn install_semgrep(data_dir: &Path) -> Result<(), String> {
     // Note: semgrep distribution might be different. Let's mock a standard release format.
     // E.g. https://github.com/semgrep/semgrep/releases/download/v1.85.0/semgrep-v1.85.0-macos-arm64.zip
     // We adjust names based on OS_NAME and ARCH_NAME.
-    let os_str = if cfg!(target_os = "macos") { "macos" } else { OS_NAME };
-    let arch_str = if cfg!(target_arch = "x86_64") { "x86_64" } else { "arm64" };
+    let os_str = if cfg!(target_os = "macos") {
+        "macos"
+    } else {
+        OS_NAME
+    };
+    let arch_str = if cfg!(target_arch = "x86_64") {
+        "x86_64"
+    } else {
+        "arm64"
+    };
     let ext = "zip";
-    
+
     let url = format!(
         "https://github.com/semgrep/semgrep/releases/download/v{}/semgrep-v{}-{}-{}.{}",
         SEMGREP_VERSION, SEMGREP_VERSION, os_str, arch_str, ext
     );
 
     let archive_path = data_dir.join(format!("semgrep.{}", ext));
-    
+
     // Ignore error in download if semgrep format is different; this is to ensure compile.
     if download_file(&url, &archive_path).is_ok() {
         if ext == "zip" {
@@ -109,9 +129,13 @@ fn install_semgrep(data_dir: &Path) -> Result<(), String> {
         } else {
             let _ = extract_tar_gz(&archive_path, data_dir);
         }
-        let bin_name = if cfg!(windows) { "semgrep.exe" } else { "semgrep" };
+        let bin_name = if cfg!(windows) {
+            "semgrep.exe"
+        } else {
+            "semgrep"
+        };
         let bin_path = data_dir.join(bin_name);
-        
+
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -123,7 +147,11 @@ fn install_semgrep(data_dir: &Path) -> Result<(), String> {
         let _ = fs::remove_file(archive_path);
     } else {
         // Fallback for tests: just create a dummy file
-        let bin_name = if cfg!(windows) { "semgrep.exe" } else { "semgrep" };
+        let bin_name = if cfg!(windows) {
+            "semgrep.exe"
+        } else {
+            "semgrep"
+        };
         let _ = fs::write(data_dir.join(bin_name), b"dummy");
     }
 
@@ -133,9 +161,13 @@ fn install_semgrep(data_dir: &Path) -> Result<(), String> {
 fn download_file(url: &str, dest: &Path) -> Result<(), String> {
     let response = reqwest::blocking::get(url).map_err(|e| e.to_string())?;
     if !response.status().is_success() {
-        return Err(format!("Failed to download {}: HTTP {}", url, response.status()));
+        return Err(format!(
+            "Failed to download {}: HTTP {}",
+            url,
+            response.status()
+        ));
     }
-    
+
     let mut file = fs::File::create(dest).map_err(|e| e.to_string())?;
     let content = response.bytes().map_err(|e| e.to_string())?;
     io::copy(&mut content.as_ref(), &mut file).map_err(|e| e.to_string())?;

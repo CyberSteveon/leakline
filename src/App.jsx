@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
+import { open } from '@tauri-apps/plugin-dialog'
 import { 
   Shield, 
   Settings, 
@@ -114,6 +115,20 @@ function App() {
 
   const depsReady = deps.gitleaks_installed && deps.semgrep_installed
 
+  const handleBrowse = async () => {
+    try {
+      const selectedPath = await open({
+        directory: true,
+        multiple: false,
+      })
+      if (selectedPath) {
+        setTargetPath(selectedPath)
+      }
+    } catch (e) {
+      console.error("Failed to open dialog:", e)
+    }
+  }
+
   return (
     <div className="container">
       <div className="panel">
@@ -122,6 +137,9 @@ function App() {
         </div>
         
         <div className="dependency-status">
+          <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '1rem' }}>
+            Dependencies are needed for advanced secrets detection (Gitleaks) and static analysis (Semgrep). The native scanner will function without them.
+          </p>
           <div className="status-info">
             <div className={`status-indicator ${deps.gitleaks_installed ? 'installed' : 'missing'}`}>
               {deps.gitleaks_installed ? <CheckCircle size={16} /> : <XCircle size={16} />}
@@ -159,6 +177,13 @@ function App() {
               placeholder="/path/to/your/project"
               disabled={scanState === 'running'}
             />
+            <button 
+              className="button" 
+              onClick={handleBrowse} 
+              disabled={scanState === 'running'}
+            >
+              Browse
+            </button>
             {scanState === 'running' ? (
               <button className="button danger" onClick={cancelScan}>
                 <StopCircle size={16} /> Stop Scan

@@ -157,10 +157,7 @@ pub fn discover(
     outcome
 }
 
-fn report_progress(
-    on_progress: &mut impl FnMut(&CoverageSummary),
-    coverage: &CoverageSummary,
-) {
+fn report_progress(on_progress: &mut impl FnMut(&CoverageSummary), coverage: &CoverageSummary) {
     if coverage.discovered_files == 1 || coverage.discovered_files % 250 == 0 {
         on_progress(coverage);
     }

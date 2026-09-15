@@ -1,8 +1,10 @@
+use crate::scanner::models::{
+    Finding, FindingLocation, IssueSeverity, IssueStage, ScanIssue, Severity,
+};
+use serde::Deserialize;
+use std::fs;
 use std::path::Path;
 use std::process::Command;
-use std::fs;
-use crate::scanner::models::{Finding, FindingLocation, ScanIssue, IssueStage, IssueSeverity, Severity};
-use serde::Deserialize;
 
 #[derive(Deserialize)]
 #[allow(dead_code)]
@@ -35,10 +37,10 @@ struct SemgrepExtra {
 pub fn run_semgrep(target_path: &Path, binary_path: &Path) -> (Vec<Finding>, Vec<ScanIssue>) {
     let mut findings = Vec::new();
     let mut issues = Vec::new();
-    
+
     let temp_dir = std::env::temp_dir();
     let output_file = temp_dir.join(format!("semgrep_output_{}.json", std::process::id()));
-    
+
     let result = Command::new(binary_path)
         .arg("scan")
         .arg("--json")
@@ -46,7 +48,7 @@ pub fn run_semgrep(target_path: &Path, binary_path: &Path) -> (Vec<Finding>, Vec
         .arg(&output_file)
         .arg(target_path)
         .output();
-        
+
     match result {
         Ok(_) => {
             if output_file.exists() {
@@ -58,7 +60,7 @@ pub fn run_semgrep(target_path: &Path, binary_path: &Path) -> (Vec<Finding>, Vec
                                 "WARNING" => Severity::Medium,
                                 _ => Severity::Low,
                             };
-                            
+
                             findings.push(Finding {
                                 finding_id: format!("semgrep-{}", i),
                                 scanner_id: "semgrep".to_string(),
@@ -92,7 +94,7 @@ pub fn run_semgrep(target_path: &Path, binary_path: &Path) -> (Vec<Finding>, Vec
                 }
                 let _ = fs::remove_file(output_file);
             }
-        },
+        }
         Err(e) => {
             issues.push(ScanIssue {
                 issue_id: "semgrep-exec-error".to_string(),
@@ -105,6 +107,6 @@ pub fn run_semgrep(target_path: &Path, binary_path: &Path) -> (Vec<Finding>, Vec
             });
         }
     }
-    
+
     (findings, issues)
 }
