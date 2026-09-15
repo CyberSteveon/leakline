@@ -188,3 +188,17 @@ fn extract_tar_gz(archive_path: &Path, dest_dir: &Path) -> Result<(), String> {
     archive.unpack(dest_dir).map_err(|e| e.to_string())?;
     Ok(())
 }
+
+pub fn uninstall(app: &AppHandle, tool_name: &str) -> Result<(), String> {
+    let data_dir = get_app_data_dir(app)?;
+    let bin_name = match tool_name {
+        "gitleaks" => if cfg!(windows) { "gitleaks.exe" } else { "gitleaks" },
+        "semgrep" => if cfg!(windows) { "semgrep.exe" } else { "semgrep" },
+        _ => return Err(format!("Unknown tool: {}", tool_name)),
+    };
+    let bin_path = data_dir.join(bin_name);
+    if bin_path.exists() {
+        fs::remove_file(bin_path).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}

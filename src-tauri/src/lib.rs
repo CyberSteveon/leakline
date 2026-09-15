@@ -28,7 +28,8 @@ pub fn run() {
             commands::get_scan_result,
             commands::dismiss_scan_result,
             commands::get_dependency_status,
-            commands::install_dependency
+            commands::install_dependency,
+            commands::uninstall_dependency
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
