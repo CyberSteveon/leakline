@@ -18,6 +18,7 @@ import './App.css'
 function App() {
   const [deps, setDeps] = useState({ gitleaks_installed: false, semgrep_installed: false })
   const [installing, setInstalling] = useState(false)
+  const [uninstalling, setUninstalling] = useState(null)
   const [targetPath, setTargetPath] = useState('')
   const [scanState, setScanState] = useState('idle') // idle, running, completed, error
   const [progress, setProgress] = useState(null)
@@ -76,6 +77,19 @@ function App() {
       alert("Failed to install dependencies: " + e)
     } finally {
       setInstalling(false)
+    }
+  }
+
+  const uninstallDep = async (depId) => {
+    setUninstalling(depId)
+    try {
+      await invoke('uninstall_dependency', { depId })
+      await checkDeps()
+    } catch (e) {
+      console.error("Failed to uninstall dependency:", e)
+      alert("Failed to uninstall dependency: " + e)
+    } finally {
+      setUninstalling(null)
     }
   }
 
@@ -141,13 +155,37 @@ function App() {
             Dependencies are needed for advanced secrets detection (Gitleaks) and static analysis (Semgrep). The native scanner will function without them.
           </p>
           <div className="status-info">
-            <div className={`status-indicator ${deps.gitleaks_installed ? 'installed' : 'missing'}`}>
-              {deps.gitleaks_installed ? <CheckCircle size={16} /> : <XCircle size={16} />}
-              <span>Gitleaks {deps.gitleaks_installed ? 'Installed' : 'Missing'}</span>
+            <div className={`status-indicator ${deps.gitleaks_installed ? 'installed' : 'missing'}`} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                {deps.gitleaks_installed ? <CheckCircle size={16} /> : <XCircle size={16} />}
+                <span>Gitleaks {deps.gitleaks_installed ? 'Installed' : 'Missing'}</span>
+              </div>
+              {deps.gitleaks_installed && (
+                <button 
+                  className="button" 
+                  style={{ padding: '0.2rem 0.5rem', fontSize: '0.75rem', borderColor: 'var(--accent-red)', color: 'var(--accent-red)', background: 'transparent' }}
+                  onClick={() => uninstallDep('gitleaks')}
+                  disabled={uninstalling === 'gitleaks'}
+                >
+                  {uninstalling === 'gitleaks' ? 'Uninstalling...' : 'Uninstall'}
+                </button>
+              )}
             </div>
-            <div className={`status-indicator ${deps.semgrep_installed ? 'installed' : 'missing'}`} style={{ marginTop: '0.5rem' }}>
-              {deps.semgrep_installed ? <CheckCircle size={16} /> : <XCircle size={16} />}
-              <span>Semgrep {deps.semgrep_installed ? 'Installed' : 'Missing'}</span>
+            <div className={`status-indicator ${deps.semgrep_installed ? 'installed' : 'missing'}`} style={{ marginTop: '0.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                {deps.semgrep_installed ? <CheckCircle size={16} /> : <XCircle size={16} />}
+                <span>Semgrep {deps.semgrep_installed ? 'Installed' : 'Missing'}</span>
+              </div>
+              {deps.semgrep_installed && (
+                <button 
+                  className="button" 
+                  style={{ padding: '0.2rem 0.5rem', fontSize: '0.75rem', borderColor: 'var(--accent-red)', color: 'var(--accent-red)', background: 'transparent' }}
+                  onClick={() => uninstallDep('semgrep')}
+                  disabled={uninstalling === 'semgrep'}
+                >
+                  {uninstalling === 'semgrep' ? 'Uninstalling...' : 'Uninstall'}
+                </button>
+              )}
             </div>
           </div>
           

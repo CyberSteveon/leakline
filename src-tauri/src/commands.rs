@@ -26,6 +26,11 @@ pub fn install_dependency(app: AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
+pub fn uninstall_dependency(app: AppHandle, dep_id: String) -> Result<(), String> {
+    crate::dependencies::uninstall(&app, &dep_id)
+}
+
+#[tauri::command]
 pub fn start_scan(
     manager: State<'_, ScanManager>,
     app: AppHandle,
