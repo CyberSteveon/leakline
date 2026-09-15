@@ -192,7 +192,7 @@ function App() {
               <button 
                 className="button" 
                 onClick={startScan} 
-                disabled={!targetPath || !depsReady}
+                disabled={!targetPath}
               >
                 <Play size={16} /> Start Scan
               </button>
