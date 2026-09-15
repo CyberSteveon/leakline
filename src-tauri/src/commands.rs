@@ -5,6 +5,7 @@ use crate::scanner::models::{
     CancelAcknowledged, ScanCommandError, ScanCompleted, ScanProgress, ScanRequest, ScanResult,
     ScanStarted,
 };
+use crate::dependencies::{get_status, install, DependencyStatus};
 
 #[tauri::command]
 pub fn app_info() -> String {
@@ -12,6 +13,16 @@ pub fn app_info() -> String {
     let version = "0.1.0";
 
     format!("{}\nVersion: {}", app_name, version)
+}
+
+#[tauri::command]
+pub fn get_dependency_status(app: AppHandle) -> Result<DependencyStatus, String> {
+    get_status(&app)
+}
+
+#[tauri::command]
+pub fn install_dependency(app: AppHandle) -> Result<(), String> {
+    install(&app)
 }
 
 
