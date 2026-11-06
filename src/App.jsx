@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { open } from '@tauri-apps/plugin-dialog'
@@ -13,6 +13,7 @@ import {
   FileSearch,
   StopCircle
 } from 'lucide-react'
+import { describeOutcome, waitForResult } from './scanOutcome.js'
 import './App.css'
 
 function App() {
@@ -22,40 +23,16 @@ function App() {
   const [targetPath, setTargetPath] = useState('')
   const [scanState, setScanState] = useState('idle') // idle, running, completed, error
   const [progress, setProgress] = useState(null)
-  const [findings, setFindings] = useState([])
-  const [scanSummary, setScanSummary] = useState(null)
+  const [result, setResult] = useState(null)
+  const [scanError, setScanError] = useState('')
+  const session = useRef(null)
+  const findings = result?.findings ?? []
+  const scanSummary = result?.summary
+  const busy = ['starting', 'running', 'cancelling'].includes(scanState)
 
   useEffect(() => {
     checkDeps()
-
-    let unlistenProgress
-    let unlistenComplete
-
-    const setupListeners = async () => {
-      unlistenProgress = await listen('scan-progress', (event) => {
-        setProgress(event.payload)
-      })
-
-      unlistenComplete = await listen('scan-complete', (event) => {
-        const payload = event.payload
-        setScanState('completed')
-        setScanSummary(payload.summary)
-        
-        // Fetch findings
-        invoke('get_scan_result', { scanId: payload.scanId })
-          .then(result => {
-            setFindings(result.findings || [])
-          })
-          .catch(console.error)
-      })
-    }
-
-    setupListeners()
-
-    return () => {
-      if (unlistenProgress) unlistenProgress()
-      if (unlistenComplete) unlistenComplete()
-    }
+    return () => { session.current = null }
   }, [])
 
   const checkDeps = async () => {
@@ -94,36 +71,54 @@ function App() {
   }
 
   const startScan = async () => {
-    if (!targetPath) return
-    
-    setScanState('running')
+    if (!targetPath || session.current) return
+    const job = { id: null }
+    session.current = job
+    const current = () => session.current === job
+    setScanState('starting')
     setProgress(null)
-    setFindings([])
-    setScanSummary(null)
-    
+    setResult(null)
+    setScanError('')
+    let unlisten
     try {
-      await invoke('start_scan', {
-        request: {
-          targetPath,
-          scannerIds: null,
-          excludePaths: null,
-          includePaths: null
-        }
+      unlisten = await listen('scan-progress', ({ payload }) => {
+        if (current() && payload.scanId === job.id) setProgress(payload)
       })
-    } catch (e) {
-      console.error("Failed to start scan:", e)
-      setScanState('error')
-      alert("Error starting scan: " + (e.message || e))
+      if (!current()) return
+      const started = await invoke('start_scan', { request: { targetPath } })
+      job.id = started.scanId
+      if (!current()) return
+      setScanState('running')
+      const report = await waitForResult(job.id,
+        scanId => invoke('get_scan_result', { scanId }),
+        () => new Promise(resolve => setTimeout(resolve, 400)), current)
+      if (!current()) return
+      setResult(report)
+      setScanState('completed')
+      // React now owns the displayed report; release the backend copy.
+      await invoke('dismiss_scan_result', { scanId: job.id }).catch(() => {})
+    } catch (error) {
+      if (current()) {
+        setScanError(job.id == null ? (error?.message || 'Could not start scan.') : 'Scan result unavailable. No conclusion is available.')
+        setScanState('error')
+      }
+    } finally {
+      unlisten?.()
+      if (current()) session.current = null
     }
   }
 
   const cancelScan = async () => {
-    if (!progress?.scanId) return
+    const job = session.current
+    if (!job?.id) return
+    setScanState('cancelling')
     try {
-      await invoke('cancel_scan', { scanId: progress.scanId })
-      setScanState('idle')
-    } catch (e) {
-      console.error("Failed to cancel scan:", e)
+      await invoke('cancel_scan', { scanId: job.id })
+    } catch (error) {
+      // Completion may already have won the race. Continue waiting for its result.
+      if (session.current === job && error?.code !== 'scan_not_active') {
+        setScanError('Cancellation was not acknowledged. Waiting for the scan result.')
+      }
     }
   }
 
@@ -206,25 +201,25 @@ function App() {
         </div>
         
         <div className="input-group">
-          <label>Target Path (Directory or File)</label>
+          <label>Local repository directory</label>
           <div style={{ display: 'flex', gap: '1rem' }}>
             <input 
               style={{ flex: 1 }}
               value={targetPath}
               onChange={(e) => setTargetPath(e.target.value)}
               placeholder="/path/to/your/project"
-              disabled={scanState === 'running'}
+              disabled={busy}
             />
             <button 
               className="button" 
               onClick={handleBrowse} 
-              disabled={scanState === 'running'}
+              disabled={busy}
             >
               Browse
             </button>
-            {scanState === 'running' ? (
-              <button className="button danger" onClick={cancelScan}>
-                <StopCircle size={16} /> Stop Scan
+            {busy ? (
+              <button className="button danger" onClick={cancelScan} disabled={scanState !== 'running'}>
+                <StopCircle size={16} /> {scanState === 'cancelling' ? 'Cancellation requested…' : scanState === 'starting' ? 'Starting…' : 'Stop Scan'}
               </button>
             ) : (
               <button 
@@ -238,7 +233,8 @@ function App() {
           </div>
         </div>
 
-        {scanState === 'running' && progress && (
+        {scanError && <p role="alert">{scanError}</p>}
+        {busy && progress && (
           <div className="progress-container">
             <div className="progress-header">
               <span>Scanning... ({progress.phase})</span>
@@ -264,12 +260,24 @@ function App() {
         )}
       </div>
 
-      {scanState === 'completed' && (
+      {result && (
         <div className="panel">
           <div className="panel-header">
             <h2><FileSearch size={20} /> Findings</h2>
           </div>
           
+          <p role="status"><strong>{describeOutcome(result)}</strong></p>
+          <p>Target: {result.target.displayPath}</p>
+          <p>Native coverage: {result.coverage.nativeProcessedFiles} of {result.coverage.selectedFiles} selected files checked.
+            {' '}{result.coverage.skippedByPolicy} outside the file policy; {result.coverage.excludedVcsEntries} VCS entries excluded;
+            {' '}{result.coverage.skippedSymlinks} symlinks and {result.coverage.skippedOversized} oversized files skipped.</p>
+          <ul>{['native', 'gitleaks', 'semgrep'].map(id => {
+            const run = result.scannerRuns.find(r => r.scannerId === id)
+            return <li key={id}>{id}: {run ? run.status.replaceAll('_', ' ') : 'not run'}</li>
+          })}</ul>
+          {result.issues.length > 0 && <details><summary>{result.issues.length} scan issues</summary>
+            <ul>{result.issues.map((issue, i) => <li key={i}>{issue.stage}: {issue.message} {issue.relativePath}</li>)}</ul>
+          </details>}
           <div className="stats-grid" style={{ marginBottom: '1.5rem' }}>
             <div className="stat-box">
               <div className="value">{scanSummary?.findingCount || 0}</div>
@@ -287,7 +295,7 @@ function App() {
             </div>
           </div>
 
-          {findings.length > 0 ? (
+          {findings.length > 0 && (
             <div className="table-container">
               <table>
                 <thead>
@@ -319,12 +327,6 @@ function App() {
                   ))}
                 </tbody>
               </table>
-            </div>
-          ) : (
-            <div className="empty-state">
-              <CheckCircle size={48} style={{ color: 'var(--success-color)' }} />
-              <h3>No vulnerabilities found</h3>
-              <p>Your codebase looks secure!</p>
             </div>
           )}
         </div>

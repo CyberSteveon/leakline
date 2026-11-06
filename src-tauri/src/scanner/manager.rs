@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet};
+use std::io::Read;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -68,6 +69,19 @@ impl ScanManager {
     }
 
     pub fn start(&self, request: ScanRequest) -> Result<ScanHandle, ScanCommandError> {
+        if [
+            &request.scanner_ids,
+            &request.include_paths,
+            &request.exclude_paths,
+        ]
+        .iter()
+        .any(|opt| opt.as_ref().is_some_and(|v| !v.is_empty()))
+        {
+            return Err(ScanCommandError::new(
+                "unsupported_options",
+                "Custom scanner selection and path filters are not supported yet.",
+            ));
+        }
         let target = validate_target(&request.target_path)?;
         let mut state = self.inner.lock().expect("scan manager lock poisoned");
 
@@ -95,7 +109,12 @@ impl ScanManager {
         })
     }
 
-    pub fn run(&self, handle: ScanHandle, observer: &dyn ScanObserver, app: Option<tauri::AppHandle>) {
+    pub fn run(
+        &self,
+        handle: ScanHandle,
+        observer: &dyn ScanObserver,
+        app: Option<tauri::AppHandle>,
+    ) {
         let scan_id = handle.started.scan_id;
         let started_at_unix_ms = now_rfc3339();
         observer.progress(progress_for(
@@ -104,11 +123,13 @@ impl ScanManager {
             &CoverageSummary::default(),
             0,
             0,
+            0,
         ));
         observer.progress(progress_for(
             scan_id,
             ScanPhase::Discovering,
             &CoverageSummary::default(),
+            0,
             0,
             0,
         ));
@@ -122,6 +143,7 @@ impl ScanManager {
                     scan_id,
                     ScanPhase::Discovering,
                     coverage,
+                    0,
                     0,
                     0,
                 ));
@@ -140,8 +162,11 @@ impl ScanManager {
             &outcome.coverage,
             processed_files,
             outcome.issues.len() as u64,
+            findings.len() as u64,
         ));
 
+        let native_started = std::time::Instant::now();
+        let discovery_issue_count = outcome.issues.len();
         let mut limit_reached = false;
 
         for file in &outcome.files {
@@ -149,28 +174,55 @@ impl ScanManager {
                 break;
             }
 
-            if total_bytes_read >= self.limits.max_total_bytes_read {
+            let remaining = self
+                .limits
+                .max_total_bytes_read
+                .saturating_sub(total_bytes_read);
+            if file.size_bytes > remaining {
                 limit_reached = true;
-                outcome.issues.push(ScanIssue {
-                    issue_id: "native-limit".to_string(),
-                    stage: IssueStage::Native,
-                    code: "max_bytes_read".to_string(),
-                    severity: IssueSeverity::Warning,
-                    message: "Exceeded max total bytes read.".to_string(),
-                    relative_path: None,
-                    scanner_id: Some("native".to_string()),
-                });
+                outcome.issues.push(native_issue(
+                    "max_bytes_read",
+                    "Native read budget exhausted.",
+                    &file.relative_path,
+                ));
                 break;
             }
-
-            if let Ok(content) = std::fs::read_to_string(&file.absolute_path) {
-                total_bytes_read += content.len() as u64;
-                let rule_file =
-                    crate::scanner::native::RuleFile::new(&file.relative_path, &content);
-                let native_outcome = native_scanner.scan_file(&rule_file, &mut next_finding_id);
-                findings.extend(native_outcome.findings);
-                outcome.issues.extend(native_outcome.issues);
+            let cap = remaining.min(self.limits.max_file_size_bytes);
+            let mut bytes = Vec::new();
+            let read = std::fs::File::open(&file.absolute_path)
+                .and_then(|input| input.take(cap.saturating_add(1)).read_to_end(&mut bytes));
+            total_bytes_read += bytes.len() as u64;
+            if bytes.len() as u64 > cap {
+                limit_reached = true;
+                outcome.issues.push(native_issue(
+                    "read_limit",
+                    "File exceeded the read limit during scanning.",
+                    &file.relative_path,
+                ));
+                continue;
             }
+            if read.is_err() {
+                outcome.coverage.unreadable_files += 1;
+                outcome.issues.push(native_issue(
+                    "read_failed",
+                    "File could not be read.",
+                    &file.relative_path,
+                ));
+                continue;
+            }
+            let Ok(content) = std::str::from_utf8(&bytes) else {
+                outcome.coverage.unreadable_files += 1;
+                outcome.issues.push(native_issue(
+                    "unsupported_encoding",
+                    "File is not valid UTF-8; native rules did not scan it.",
+                    &file.relative_path,
+                ));
+                continue;
+            };
+            let rule_file = crate::scanner::native::RuleFile::new(&file.relative_path, content);
+            let native_outcome = native_scanner.scan_file(&rule_file, &mut next_finding_id);
+            findings.extend(native_outcome.findings);
+            outcome.issues.extend(native_outcome.issues);
             processed_files += 1;
 
             if processed_files == 1 || processed_files % 100 == 0 {
@@ -180,19 +232,26 @@ impl ScanManager {
                     &outcome.coverage,
                     processed_files,
                     outcome.issues.len() as u64,
+                    findings.len() as u64,
                 ));
             }
         }
 
-        let dep_status = if let Some(app_handle) = app.as_ref() {
-            crate::dependencies::get_status(app_handle).unwrap_or_default()
-        } else {
-            Default::default()
-        };
         let mut scanner_runs = Vec::new();
 
-        let native_status = if limit_reached {
+        outcome.coverage.native_processed_files = processed_files;
+        let native_issue_count = outcome.issues.len() - discovery_issue_count;
+        let native_status = if handle.cancellation.load(Ordering::Relaxed) {
+            ScanStatus::Cancelled
+        } else if limit_reached
+            || processed_files < outcome.coverage.selected_files
+            || outcome.coverage.skipped_oversized > 0
+            || outcome.coverage.traversal_errors > 0
+            || outcome.coverage.candidate_limit_reached
+        {
             ScanStatus::Partial
+        } else if native_issue_count > 0 {
+            ScanStatus::CompletedWithIssues
         } else {
             ScanStatus::Completed
         };
@@ -200,11 +259,32 @@ impl ScanManager {
             scanner_id: "native".to_string(),
             status: native_status,
             findings_count: findings.len() as u64,
-            issues_count: outcome.issues.len() as u64,
-            duration_ms: 0,
+            issues_count: native_issue_count as u64,
+            duration_ms: native_started.elapsed().as_millis(),
         });
 
-        if let Some(app_data_dir) = app.as_ref().and_then(|a| a.path().app_data_dir().ok()) {
+        let dependencies = app.as_ref().and_then(|app| {
+            match (
+                crate::dependencies::get_status(app),
+                app.path().app_data_dir(),
+            ) {
+                (Ok(status), Ok(dir)) => Some((dir, status)),
+                _ => {
+                    outcome.issues.push(ScanIssue {
+                        issue_id: "dependency-status".into(),
+                        code: "dependency_status_unavailable".into(),
+                        message: "Could not determine which optional scanners are available."
+                            .into(),
+                        stage: IssueStage::Result,
+                        severity: IssueSeverity::Error,
+                        relative_path: None,
+                        scanner_id: None,
+                    });
+                    None
+                }
+            }
+        });
+        if let Some((app_data_dir, dep_status)) = dependencies {
             let target_path = std::path::Path::new(&handle.target.canonical_path);
 
             if dep_status.gitleaks_installed && !handle.cancellation.load(Ordering::Relaxed) {
@@ -214,6 +294,7 @@ impl ScanManager {
                     &outcome.coverage,
                     processed_files,
                     outcome.issues.len() as u64,
+                    findings.len() as u64,
                 ));
                 let gitleaks_bin = app_data_dir.join(if cfg!(windows) {
                     "gitleaks.exe"
@@ -231,8 +312,10 @@ impl ScanManager {
                 findings.extend(gl_findings);
                 outcome.issues.extend(gl_issues);
 
-                let status = if issues_count > 0 {
-                    ScanStatus::CompletedWithIssues
+                let status = if issues_count > 0 && findings_count == 0 {
+                    ScanStatus::Failed
+                } else if issues_count > 0 {
+                    ScanStatus::Partial
                 } else {
                     ScanStatus::Completed
                 };
@@ -253,6 +336,7 @@ impl ScanManager {
                     &outcome.coverage,
                     processed_files,
                     outcome.issues.len() as u64,
+                    findings.len() as u64,
                 ));
                 let semgrep_bin = app_data_dir.join(if cfg!(windows) {
                     "semgrep.exe"
@@ -270,8 +354,10 @@ impl ScanManager {
                 findings.extend(sg_findings);
                 outcome.issues.extend(sg_issues);
 
-                let status = if issues_count > 0 {
-                    ScanStatus::CompletedWithIssues
+                let status = if issues_count > 0 && findings_count == 0 {
+                    ScanStatus::Failed
+                } else if issues_count > 0 {
+                    ScanStatus::Partial
                 } else {
                     ScanStatus::Completed
                 };
@@ -302,7 +388,18 @@ impl ScanManager {
 
         let status = if handle.cancellation.load(Ordering::Relaxed) || outcome.cancelled {
             ScanStatus::Cancelled
-        } else if outcome.coverage.candidate_limit_reached || limit_reached {
+        } else if processed_files == 0
+            && scanner_runs
+                .iter()
+                .skip(1)
+                .all(|run| run.status == ScanStatus::Failed)
+            && (outcome.coverage.traversal_errors > 0 || outcome.coverage.unreadable_files > 0)
+        {
+            ScanStatus::Failed
+        } else if scanner_runs
+            .iter()
+            .any(|run| matches!(run.status, ScanStatus::Partial | ScanStatus::Failed))
+        {
             ScanStatus::Partial
         } else if outcome.issues.is_empty() {
             ScanStatus::Completed
@@ -333,6 +430,7 @@ impl ScanManager {
             status,
             summary: result.summary.clone(),
         };
+        let final_count = summary.finding_count;
         let coverage = result.coverage.clone();
         let issue_count = result.issues.len() as u64;
 
@@ -346,8 +444,9 @@ impl ScanManager {
             scan_id,
             completion_phase,
             &coverage,
-            0,
+            processed_files,
             issue_count,
+            final_count,
         ));
         observer.completed(completion);
     }
@@ -386,12 +485,25 @@ impl ScanManager {
     }
 }
 
+fn native_issue(code: &str, message: &str, path: &str) -> ScanIssue {
+    ScanIssue {
+        issue_id: format!("native:{code}:{path}"),
+        stage: IssueStage::Native,
+        code: code.into(),
+        severity: IssueSeverity::Warning,
+        message: message.into(),
+        relative_path: Some(path.into()),
+        scanner_id: Some("native".into()),
+    }
+}
+
 fn progress_for(
     scan_id: u64,
     phase: ScanPhase,
     coverage: &CoverageSummary,
     processed_files: u64,
     issue_count: u64,
+    finding_count: u64,
 ) -> ScanProgress {
     ScanProgress {
         scan_id,
@@ -399,7 +511,7 @@ fn progress_for(
         discovered_files: coverage.discovered_files,
         selected_files: coverage.selected_files,
         processed_files,
-        finding_count: 0,
+        finding_count,
         issue_count,
     }
 }
@@ -507,6 +619,56 @@ mod tests {
         assert_eq!(result.status, ScanStatus::Cancelled);
         manager.dismiss(scan_id).unwrap();
         fs::remove_dir_all(root).unwrap();
+    }
+
+    fn scan_repo(
+        manager: &ScanManager,
+        root: &std::path::Path,
+    ) -> crate::scanner::models::ScanResult {
+        let handle = manager
+            .start(ScanRequest {
+                target_path: root.display().to_string(),
+                scanner_ids: None,
+                include_paths: None,
+                exclude_paths: None,
+            })
+            .unwrap();
+        let id = handle.started.scan_id;
+        manager.run(handle, &NoopScanObserver, None);
+        manager.result(id).unwrap()
+    }
+
+    #[test]
+    fn read_failures_are_visible_without_losing_valid_findings() {
+        let root = tempfile::tempdir().unwrap();
+        fs::write(root.path().join("bad.rs"), [0xff]).unwrap();
+        let manager = ScanManager::default();
+        assert_eq!(scan_repo(&manager, root.path()).status, ScanStatus::Failed);
+        fs::write(root.path().join("config.env"), "password=fixture").unwrap();
+        let result = scan_repo(&manager, root.path());
+        assert_eq!(result.status, ScanStatus::Partial);
+        assert_eq!(result.coverage.native_processed_files, 1);
+        assert_eq!(result.coverage.unreadable_files, 1);
+        assert_eq!(result.issues[0].code, "unsupported_encoding");
+        assert_eq!(result.findings.len(), 1);
+    }
+
+    #[test]
+    fn empty_repository_and_exhausted_budget_are_distinct() {
+        let root = tempfile::tempdir().unwrap();
+        let manager = ScanManager::new(ScanLimits {
+            max_total_bytes_read: 1,
+            ..ScanLimits::default()
+        });
+        assert_eq!(
+            scan_repo(&manager, root.path()).status,
+            ScanStatus::Completed
+        );
+        fs::write(root.path().join("large.js"), "ab").unwrap();
+        let result = scan_repo(&manager, root.path());
+        assert_eq!(result.status, ScanStatus::Partial);
+        assert_eq!(result.coverage.native_processed_files, 0);
+        assert_eq!(result.issues[0].code, "max_bytes_read");
     }
 
     #[test]

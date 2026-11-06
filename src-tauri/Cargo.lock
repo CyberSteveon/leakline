@@ -2074,6 +2074,7 @@ dependencies = [
  "flate2",
  "log",
  "reqwest 0.11.27",
+ "same-file",
  "serde",
  "serde_json",
  "tar",
@@ -2081,6 +2082,7 @@ dependencies = [
  "tauri-build",
  "tauri-plugin-dialog",
  "tauri-plugin-log",
+ "tempfile",
  "walkdir",
  "zip",
 ]

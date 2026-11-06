@@ -5,5 +5,6 @@ pub mod manager;
 pub mod models;
 pub mod native;
 pub mod policy;
+mod report;
 pub mod semgrep;
 pub mod target;

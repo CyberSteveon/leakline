@@ -71,6 +71,7 @@ pub struct CoverageSummary {
     pub discovered_files: u64,
     pub eligible_files: u64,
     pub selected_files: u64,
+    pub native_processed_files: u64,
     pub selected_bytes: u64,
     pub skipped_by_policy: u64,
     pub excluded_vcs_entries: u64,
