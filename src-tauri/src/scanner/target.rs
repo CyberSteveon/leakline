@@ -3,8 +3,6 @@ use std::path::{Path, PathBuf};
 
 #[cfg(unix)]
 use std::os::unix::fs::MetadataExt;
-#[cfg(windows)]
-use std::os::windows::fs::MetadataExt;
 
 use super::models::{ScanCommandError, ScanTargetSummary};
 
@@ -32,28 +30,9 @@ pub fn normalize_path(path_str: &str) -> String {
     path_str.to_string()
 }
 
+#[cfg(unix)]
 fn is_same_file(meta1: &fs::Metadata, meta2: &fs::Metadata) -> bool {
-    #[cfg(unix)]
-    {
-        meta1.dev() == meta2.dev() && meta1.ino() == meta2.ino()
-    }
-    #[cfg(windows)]
-    {
-        if let (Some(vol1), Some(vol2), Some(idx1), Some(idx2)) = (
-            meta1.volume_serial_number(),
-            meta2.volume_serial_number(),
-            meta1.file_index(),
-            meta2.file_index(),
-        ) {
-            vol1 == vol2 && idx1 == idx2
-        } else {
-            false
-        }
-    }
-    #[cfg(not(any(unix, windows)))]
-    {
-        false
-    }
+    meta1.dev() == meta2.dev() && meta1.ino() == meta2.ino()
 }
 
 pub fn validate_target(target_path: &str) -> Result<ValidatedTarget, ScanCommandError> {
@@ -94,7 +73,11 @@ pub fn validate_target(target_path: &str) -> Result<ValidatedTarget, ScanCommand
         ));
     }
 
-    if !is_same_file(&submitted_metadata, &canonical_metadata) {
+    #[cfg(unix)]
+    let same = is_same_file(&submitted_metadata, &canonical_metadata);
+    #[cfg(windows)]
+    let same = same_file::is_same_file(submitted_path, &canonical_path).unwrap_or(false);
+    if !same {
         return Err(ScanCommandError::new(
             "target_unavailable",
             "The scan target was modified during validation.",

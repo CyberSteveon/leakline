@@ -1,10 +1,8 @@
-use crate::scanner::models::{
-    Finding, FindingLocation, IssueSeverity, IssueStage, ScanIssue, Severity,
-};
+use super::report::issue;
+use crate::scanner::models::{Finding, FindingLocation, IssueStage, ScanIssue, Severity};
 use serde::Deserialize;
-use std::fs;
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 #[derive(Deserialize)]
 #[allow(dead_code)]
@@ -30,83 +28,106 @@ struct SemgrepPosition {
 
 #[derive(Deserialize)]
 struct SemgrepExtra {
-    message: String,
     severity: String,
 }
 
 pub fn run_semgrep(target_path: &Path, binary_path: &Path) -> (Vec<Finding>, Vec<ScanIssue>) {
+    let output = Command::new(binary_path)
+        .args(["scan", "--metrics=off", "--disable-version-check", "--json"])
+        .arg(target_path)
+        .stderr(Stdio::null())
+        .output();
+    match output {
+        Ok(out) => parse_report(out.status.success(), &out.stdout),
+        Err(_) => (
+            vec![],
+            vec![issue(
+                IssueStage::Semgrep,
+                "exec_error",
+                "Could not start Semgrep.",
+            )],
+        ),
+    }
+}
+
+fn parse_report(success: bool, report: &[u8]) -> (Vec<Finding>, Vec<ScanIssue>) {
     let mut findings = Vec::new();
     let mut issues = Vec::new();
-
-    let temp_dir = std::env::temp_dir();
-    let output_file = temp_dir.join(format!("semgrep_output_{}.json", std::process::id()));
-
-    let result = Command::new(binary_path)
-        .arg("scan")
-        .arg("--json")
-        .arg("--json-output")
-        .arg(&output_file)
-        .arg(target_path)
-        .output();
-
-    match result {
-        Ok(_) => {
-            if output_file.exists() {
-                if let Ok(content) = fs::read_to_string(&output_file) {
-                    if let Ok(output) = serde_json::from_str::<SemgrepOutput>(&content) {
-                        for (i, r) in output.results.into_iter().enumerate() {
-                            let severity = match r.extra.severity.as_str() {
-                                "ERROR" => Severity::Critical,
-                                "WARNING" => Severity::Medium,
-                                _ => Severity::Low,
-                            };
-
-                            findings.push(Finding {
-                                finding_id: format!("semgrep-{}", i),
-                                scanner_id: "semgrep".to_string(),
-                                rule_id: r.check_id,
-                                title: "Semgrep Finding".to_string(),
-                                description: r.extra.message,
-                                severity,
-                                location: FindingLocation {
-                                    relative_path: r.path,
-                                    start_line: Some(r.start.line),
-                                    start_column: Some(r.start.col),
-                                    end_line: Some(r.end.line),
-                                    end_column: Some(r.end.col),
-                                },
-                                tags: vec!["sast".to_string()],
-                                remediation: None,
-                                fingerprint: "".to_string(),
-                            });
-                        }
-                    } else {
-                        issues.push(ScanIssue {
-                            issue_id: "semgrep-parse-error".to_string(),
-                            stage: IssueStage::Semgrep,
-                            code: "parse_error".to_string(),
-                            severity: IssueSeverity::Error,
-                            message: "Failed to parse semgrep JSON output".to_string(),
-                            relative_path: None,
-                            scanner_id: Some("semgrep".to_string()),
-                        });
-                    }
-                }
-                let _ = fs::remove_file(output_file);
-            }
-        }
-        Err(e) => {
-            issues.push(ScanIssue {
-                issue_id: "semgrep-exec-error".to_string(),
-                stage: IssueStage::Semgrep,
-                code: "exec_error".to_string(),
-                severity: IssueSeverity::Error,
-                message: format!("Failed to execute semgrep: {}", e),
-                relative_path: None,
-                scanner_id: Some("semgrep".to_string()),
-            });
-        }
+    if !success {
+        issues.push(issue(
+            IssueStage::Semgrep,
+            "process_failed",
+            "Semgrep did not finish successfully.",
+        ));
     }
+    let Ok(output) = serde_json::from_slice::<SemgrepOutput>(report) else {
+        issues.push(issue(
+            IssueStage::Semgrep,
+            "invalid_report",
+            "Semgrep returned no readable, valid report.",
+        ));
+        return (findings, issues);
+    };
+    if output
+        .errors
+        .as_ref()
+        .is_some_and(|errors| !errors.is_empty())
+    {
+        issues.push(issue(
+            IssueStage::Semgrep,
+            "analysis_error",
+            "Semgrep reported analysis errors; coverage is incomplete.",
+        ));
+    }
+    for (i, r) in output.results.into_iter().enumerate() {
+        let severity = match r.extra.severity.as_str() {
+            "ERROR" => Severity::Critical,
+            "WARNING" => Severity::Medium,
+            _ => Severity::Low,
+        };
 
+        findings.push(Finding {
+            finding_id: format!("semgrep-{}", i),
+            scanner_id: "semgrep".to_string(),
+            rule_id: r.check_id,
+            title: "Semgrep Finding".to_string(),
+            description: "Semgrep rule matched.".into(),
+            severity,
+            location: FindingLocation {
+                relative_path: r.path,
+                start_line: Some(r.start.line),
+                start_column: Some(r.start.col),
+                end_line: Some(r.end.line),
+                end_column: Some(r.end.col),
+            },
+            tags: vec!["sast".to_string()],
+            remediation: None,
+            fingerprint: "".to_string(),
+        });
+    }
     (findings, issues)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn empty_is_only_clean_with_positive_evidence() {
+        let valid = br#"{"results":[],"errors":[]}"#;
+        assert!(parse_report(true, valid).1.is_empty());
+        assert!(!parse_report(false, valid).1.is_empty());
+        assert!(!parse_report(true, b"").1.is_empty());
+        assert!(!parse_report(true, b"broken").1.is_empty());
+    }
+    #[test]
+    fn analysis_errors_preserve_findings_without_exposing_diagnostics() {
+        let report = br#"{"results":[{"check_id":"example","path":"a.rs","start":{"line":1,"col":1},"end":{"line":1,"col":2},"extra":{"message":"private fixture","severity":"WARNING"}}],"errors":[{}]}"#;
+        let (findings, issues) = parse_report(false, report);
+        assert_eq!(findings.len(), 1);
+        assert_eq!(issues.len(), 2);
+        assert!(!serde_json::to_string(&findings)
+            .unwrap()
+            .contains("private fixture"));
+    }
 }
