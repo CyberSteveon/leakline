@@ -78,17 +78,11 @@ fn install_gitleaks(data_dir: &Path) -> Result<(), String> {
         extract_tar_gz(&archive_path, data_dir)?;
     }
 
-    let bin_name = if cfg!(windows) {
-        "gitleaks.exe"
-    } else {
-        "gitleaks"
-    };
-    let bin_path = data_dir.join(bin_name);
-
     // Ensure executable permissions on Unix
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
+        let bin_path = data_dir.join("gitleaks");
         if let Ok(mut perms) = fs::metadata(&bin_path).map(|m| m.permissions()) {
             perms.set_mode(0o755);
             let _ = fs::set_permissions(&bin_path, perms);
@@ -129,16 +123,10 @@ fn install_semgrep(data_dir: &Path) -> Result<(), String> {
         } else {
             let _ = extract_tar_gz(&archive_path, data_dir);
         }
-        let bin_name = if cfg!(windows) {
-            "semgrep.exe"
-        } else {
-            "semgrep"
-        };
-        let bin_path = data_dir.join(bin_name);
-
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
+            let bin_path = data_dir.join("semgrep");
             if let Ok(mut perms) = fs::metadata(&bin_path).map(|m| m.permissions()) {
                 perms.set_mode(0o755);
                 let _ = fs::set_permissions(&bin_path, perms);
@@ -192,8 +180,20 @@ fn extract_tar_gz(archive_path: &Path, dest_dir: &Path) -> Result<(), String> {
 pub fn uninstall(app: &AppHandle, tool_name: &str) -> Result<(), String> {
     let data_dir = get_app_data_dir(app)?;
     let bin_name = match tool_name {
-        "gitleaks" => if cfg!(windows) { "gitleaks.exe" } else { "gitleaks" },
-        "semgrep" => if cfg!(windows) { "semgrep.exe" } else { "semgrep" },
+        "gitleaks" => {
+            if cfg!(windows) {
+                "gitleaks.exe"
+            } else {
+                "gitleaks"
+            }
+        }
+        "semgrep" => {
+            if cfg!(windows) {
+                "semgrep.exe"
+            } else {
+                "semgrep"
+            }
+        }
         _ => return Err(format!("Unknown tool: {}", tool_name)),
     };
     let bin_path = data_dir.join(bin_name);

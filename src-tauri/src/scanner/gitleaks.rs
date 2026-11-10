@@ -80,26 +80,26 @@ fn parse_report(success: bool, report: &[u8]) -> (Vec<Finding>, Vec<ScanIssue>) 
         return (findings, issues);
     };
 
-    for (i, m) in matches.into_iter().enumerate() {
+    for (match_index, rule_match) in matches.into_iter().enumerate() {
         findings.push(Finding {
-            finding_id: format!("gitleaks-{}", i),
+            finding_id: format!("gitleaks-{match_index}"),
             scanner_id: "gitleaks".to_string(),
-            rule_id: m.rule_id.unwrap_or_else(|| "unknown".to_string()),
+            rule_id: rule_match.rule_id.unwrap_or_else(|| "unknown".to_string()),
             title: "Gitleaks Finding".to_string(),
-            description: m
+            description: rule_match
                 .description
                 .unwrap_or_else(|| "Secret detected".to_string()),
             severity: Severity::High,
             location: FindingLocation {
-                relative_path: m.file.unwrap_or_else(|| "unknown".to_string()),
-                start_line: m.start_line,
-                start_column: m.start_column,
-                end_line: m.end_line,
-                end_column: m.end_column,
+                relative_path: rule_match.file.unwrap_or_else(|| "unknown".to_string()),
+                start_line: rule_match.start_line,
+                start_column: rule_match.start_column,
+                end_line: rule_match.end_line,
+                end_column: rule_match.end_column,
             },
             tags: vec!["secret".to_string()],
             remediation: None,
-            fingerprint: m.fingerprint.unwrap_or_else(|| "".to_string()),
+            fingerprint: rule_match.fingerprint.unwrap_or_default(),
         });
     }
     (findings, issues)

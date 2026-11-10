@@ -13,7 +13,7 @@ pub struct RuleMetadata {
     pub remediation: Option<&'static str>,
 }
 
-/// A bounded, in-memory text view supplied by the future native file reader.
+/// A bounded, in-memory text view supplied by the native file reader.
 ///
 /// Rules receive no absolute path and cannot return this content through the
 /// rule interface. Implementations must not log or retain `content`.
@@ -150,113 +150,15 @@ impl NativeScanner {
 
         outcome
     }
+
     pub fn default_scanner() -> Self {
         Self {
             rules: vec![
                 Box::new(PrivateKeyRule),
                 Box::new(AwsAccessKeyRule),
                 Box::new(GenericSecretRule),
-                Box::new(AdDomainAdminRule),
-                Box::new(SccmAdminRule),
-                Box::new(SapRfcRule),
             ],
         }
-    }
-}
-
-pub struct AdDomainAdminRule;
-impl NativeRule for AdDomainAdminRule {
-    fn metadata(&self) -> RuleMetadata {
-        RuleMetadata {
-            id: "ad.domain_admin",
-            name: "Active Directory Credentials",
-            description: "Identifies hardcoded Active Directory credentials or LDAP connection strings.",
-            severity: Severity::High,
-            tags: &["ad", "ldap", "credentials"],
-            remediation: Some("Remove hardcoded AD credentials and use secure vaults or environment variables."),
-        }
-    }
-    fn applies_to(&self, _: &RuleFile<'_>) -> bool {
-        true
-    }
-    fn evaluate(&self, file: &RuleFile<'_>) -> Result<Vec<RuleMatch>, RuleError> {
-        let mut matches = Vec::new();
-        for (i, line) in file.content().lines().enumerate() {
-            let lower = line.to_lowercase();
-            if lower.contains("ldap://") || lower.contains("samaccountname") || lower.contains("domain admins") {
-                matches.push(RuleMatch::new(
-                    Some(i as u64 + 1),
-                    Some(1),
-                    Some(i as u64 + 1),
-                    Some(line.len() as u64),
-                ));
-            }
-        }
-        Ok(matches)
-    }
-}
-
-pub struct SccmAdminRule;
-impl NativeRule for SccmAdminRule {
-    fn metadata(&self) -> RuleMetadata {
-        RuleMetadata {
-            id: "sccm.admin",
-            name: "SCCM Network Access Accounts",
-            description: "Identifies hardcoded SCCM Network Access Accounts or configuration files.",
-            severity: Severity::High,
-            tags: &["sccm", "admin"],
-            remediation: Some("Remove hardcoded SCCM accounts and use secure configurations."),
-        }
-    }
-    fn applies_to(&self, _: &RuleFile<'_>) -> bool {
-        true
-    }
-    fn evaluate(&self, file: &RuleFile<'_>) -> Result<Vec<RuleMatch>, RuleError> {
-        let mut matches = Vec::new();
-        for (i, line) in file.content().lines().enumerate() {
-            let lower = line.to_lowercase();
-            if lower.contains("sms_sitesystemtositeserverconnection") || lower.contains("smsadminui.log") {
-                matches.push(RuleMatch::new(
-                    Some(i as u64 + 1),
-                    Some(1),
-                    Some(i as u64 + 1),
-                    Some(line.len() as u64),
-                ));
-            }
-        }
-        Ok(matches)
-    }
-}
-
-pub struct SapRfcRule;
-impl NativeRule for SapRfcRule {
-    fn metadata(&self) -> RuleMetadata {
-        RuleMetadata {
-            id: "sap.rfc",
-            name: "SAP RFC Credentials",
-            description: "Identifies hardcoded SAP RFC credentials or JCo properties.",
-            severity: Severity::High,
-            tags: &["sap", "rfc", "jco"],
-            remediation: Some("Remove hardcoded SAP credentials and configure secure storage."),
-        }
-    }
-    fn applies_to(&self, _: &RuleFile<'_>) -> bool {
-        true
-    }
-    fn evaluate(&self, file: &RuleFile<'_>) -> Result<Vec<RuleMatch>, RuleError> {
-        let mut matches = Vec::new();
-        for (i, line) in file.content().lines().enumerate() {
-            let lower = line.to_lowercase();
-            if lower.contains("jco.client.passwd") || lower.contains("ashost=") || lower.contains("sysnr=") {
-                matches.push(RuleMatch::new(
-                    Some(i as u64 + 1),
-                    Some(1),
-                    Some(i as u64 + 1),
-                    Some(line.len() as u64),
-                ));
-            }
-        }
-        Ok(matches)
     }
 }
 
@@ -277,12 +179,12 @@ impl NativeRule for PrivateKeyRule {
     }
     fn evaluate(&self, file: &RuleFile<'_>) -> Result<Vec<RuleMatch>, RuleError> {
         let mut matches = Vec::new();
-        for (i, line) in file.content().lines().enumerate() {
+        for (line_index, line) in file.content().lines().enumerate() {
             if line.contains("-----BEGIN") && line.contains("PRIVATE KEY-----") {
                 matches.push(RuleMatch::new(
-                    Some(i as u64 + 1),
+                    Some(line_index as u64 + 1),
                     Some(1),
-                    Some(i as u64 + 1),
+                    Some(line_index as u64 + 1),
                     Some(line.len() as u64),
                 ));
             }
@@ -308,17 +210,15 @@ impl NativeRule for AwsAccessKeyRule {
     }
     fn evaluate(&self, file: &RuleFile<'_>) -> Result<Vec<RuleMatch>, RuleError> {
         let mut matches = Vec::new();
-        for (i, line) in file.content().lines().enumerate() {
-            if line.contains("AKIA") {
-                if let Some(idx) = line.find("AKIA") {
-                    if line[idx..].len() >= 20 {
-                        matches.push(RuleMatch::new(
-                            Some(i as u64 + 1),
-                            Some(idx as u64 + 1),
-                            Some(i as u64 + 1),
-                            Some(idx as u64 + 21),
-                        ));
-                    }
+        for (line_index, line) in file.content().lines().enumerate() {
+            if let Some(column_index) = line.find("AKIA") {
+                if line[column_index..].len() >= 20 {
+                    matches.push(RuleMatch::new(
+                        Some(line_index as u64 + 1),
+                        Some(column_index as u64 + 1),
+                        Some(line_index as u64 + 1),
+                        Some(column_index as u64 + 21),
+                    ));
                 }
             }
         }
@@ -343,7 +243,7 @@ impl NativeRule for GenericSecretRule {
     }
     fn evaluate(&self, file: &RuleFile<'_>) -> Result<Vec<RuleMatch>, RuleError> {
         let mut matches = Vec::new();
-        for (i, line) in file.content().lines().enumerate() {
+        for (line_index, line) in file.content().lines().enumerate() {
             let lower = line.to_lowercase();
             if (lower.contains("password=")
                 || lower.contains("api_key=")
@@ -352,9 +252,9 @@ impl NativeRule for GenericSecretRule {
                 && !lower.contains("=true")
             {
                 matches.push(RuleMatch::new(
-                    Some(i as u64 + 1),
+                    Some(line_index as u64 + 1),
                     Some(1),
-                    Some(i as u64 + 1),
+                    Some(line_index as u64 + 1),
                     Some(line.len() as u64),
                 ));
             }
@@ -429,6 +329,45 @@ mod tests {
     use crate::scanner::models::{IssueStage, Severity};
 
     struct FirstRule;
+
+    #[test]
+    fn default_rules_ignore_enterprise_keywords_without_secrets() {
+        let scanner = NativeScanner::default_scanner();
+        let content = "ldap://directory.example\nsamaccountname\ndomain admins\n\
+            sms_sitesystemtositeserverconnection\nsmsadminui.log\n\
+            jco.client.passwd\nashost=example\nsysnr=00";
+        let file = RuleFile::new("scripts/inventory.ps1", content);
+        let mut sequence = 0;
+
+        let outcome = scanner.scan_file(&file, &mut sequence);
+
+        assert!(outcome.findings.is_empty());
+        assert!(outcome.issues.is_empty());
+    }
+
+    #[test]
+    fn default_rules_still_detect_secrets_in_local_scripts() {
+        let scanner = NativeScanner::default_scanner();
+        let content = "-----BEGIN PRIVATE KEY-----\nAKIA0123456789ABCDEF\npassword=fixture-only";
+        let file = RuleFile::new("scripts/configure.ps1", content);
+        let mut sequence = 0;
+
+        let outcome = scanner.scan_file(&file, &mut sequence);
+        let rule_ids: Vec<_> = outcome
+            .findings
+            .iter()
+            .map(|finding| finding.rule_id.as_str())
+            .collect();
+
+        assert_eq!(
+            rule_ids,
+            ["crypto.private_key", "aws.access_key", "generic.secret"]
+        );
+        assert!(outcome.issues.is_empty());
+        let serialized = serde_json::to_string(&outcome.findings).unwrap();
+        assert!(!serialized.contains("AKIA0123456789ABCDEF"));
+        assert!(!serialized.contains("fixture-only"));
+    }
 
     impl NativeRule for FirstRule {
         fn metadata(&self) -> RuleMetadata {

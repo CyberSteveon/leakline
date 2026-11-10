@@ -1,8 +1,12 @@
 # Leakline
 
-A desktop security scanner built for IT teams, MSPs, and sysadmins. Leakline performs local, on-premises file scanning for secrets, vulnerabilities, and environment-specific misconfigurations — no data leaves your machine.
+A desktop security scanner focused on local code repositories and script folders on Windows, macOS, and Linux. Leakline scans files locally for potential secrets and security issues.
 
 Built with Tauri v2, Rust, and React.
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for code conventions, formatting commands, and validation checks.
+
+PowerShell scripts and configuration files can be scanned as ordinary local files. Leakline does not connect to or audit AD, SCCM, or SAP systems. Native checks are heuristics: review findings and scan coverage rather than treating a scan with no findings as proof that a repository is secure.
 
 ---
 
@@ -10,7 +14,7 @@ Built with Tauri v2, Rust, and React.
 
 - **Secrets detection** via Gitleaks integration
 - **Static analysis** via Semgrep integration
-- **Custom pattern matching** for AD/SCCM and SAP environments with a native Rust scanning engine
+- **Native secret checks** for private key markers, AWS access key patterns, and generic secret assignments
 - **Dynamic Dependency Management** — one-click download/uninstall for third-party scanners (Gitleaks & Semgrep) directly from the UI
 - **File system scanning** with allowlist-based filtering and memory-safe chunking
 - **Severity classification** — Minimal, Low, Medium, High, Critical

@@ -6,4 +6,4 @@
  * (toBeInTheDocument, toHaveTextContent, etc.) are available
  * in every test without explicit per-file imports.
  */
-import '@testing-library/jest-dom';
+import '@testing-library/jest-dom'

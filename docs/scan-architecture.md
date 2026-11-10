@@ -252,8 +252,13 @@ severity.
 
 ## 7. Native/custom rule architecture
 
-Native rules cover environment-specific AD/SCCM/SAP checks and lightweight local
-secret/configuration patterns that do not require an external binary.
+Native rules cover lightweight secret/configuration patterns in local code
+repositories and script folders without requiring an external binary. The
+current built-in rules check private key markers, AWS access key patterns, and
+generic secret assignments. AD/SCCM/SAP-specific keyword checks are out of scope;
+scripts and configuration files for those systems remain ordinary local scan
+targets. Future rules should identify evidence of a security issue rather than
+flagging product names or administrative terminology alone.
 
 Use a small, internal registry:
 

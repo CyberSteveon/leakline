@@ -7,6 +7,8 @@
     "dev": "vite",
     "build": "vite build",
     "lint": "eslint .",
+    "format": "prettier --write \"**/*.{js,jsx,css,json,yml,yaml,html}\" && cargo fmt --manifest-path src-tauri/Cargo.toml",
+    "format:check": "prettier --check \"**/*.{js,jsx,css,json,yml,yaml,html}\" && cargo fmt --manifest-path src-tauri/Cargo.toml -- --check",
     "preview": "vite preview",
     "tauri": "tauri"
   },
@@ -27,6 +29,7 @@
     "eslint-plugin-react-hooks": "^7.0.1",
     "eslint-plugin-react-refresh": "^0.5.2",
     "globals": "^17.4.0",
+    "prettier": "3.9.10",
     "vite": "^8.0.1"
   }
 }
