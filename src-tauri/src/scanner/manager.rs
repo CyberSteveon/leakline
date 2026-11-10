@@ -3,7 +3,7 @@ use std::io::Read;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use tauri::Manager;
 
 use super::discovery;
@@ -11,8 +11,9 @@ use super::limits::ScanLimits;
 use super::models::{
     CancelAcknowledged, CoverageSummary, IssueSeverity, IssueStage, ScanCommandError,
     ScanCompleted, ScanIssue, ScanPhase, ScanProgress, ScanRequest, ScanResult, ScanStarted,
-    ScanStatus, ScanSummary,
+    ScanStatus, ScanSummary, ScannerRunSummary, Severity,
 };
+use super::native::{NativeScanner, RuleFile};
 use super::target::{validate_target, ValidatedTarget};
 
 pub trait ScanObserver: Send + Sync {
@@ -116,7 +117,7 @@ impl ScanManager {
         app: Option<tauri::AppHandle>,
     ) {
         let scan_id = handle.started.scan_id;
-        let started_at_unix_ms = now_rfc3339();
+        let started_at = now_rfc3339();
         observer.progress(progress_for(
             scan_id,
             ScanPhase::Queued,
@@ -154,7 +155,7 @@ impl ScanManager {
         let mut total_bytes_read = 0;
         let mut processed_files = 0;
         let mut next_finding_id = 0;
-        let native_scanner = crate::scanner::native::NativeScanner::default_scanner();
+        let native_scanner = NativeScanner::default_scanner();
 
         observer.progress(progress_for(
             scan_id,
@@ -165,7 +166,7 @@ impl ScanManager {
             findings.len() as u64,
         ));
 
-        let native_started = std::time::Instant::now();
+        let native_started = Instant::now();
         let discovery_issue_count = outcome.issues.len();
         let mut limit_reached = false;
 
@@ -219,7 +220,7 @@ impl ScanManager {
                 ));
                 continue;
             };
-            let rule_file = crate::scanner::native::RuleFile::new(&file.relative_path, content);
+            let rule_file = RuleFile::new(&file.relative_path, content);
             let native_outcome = native_scanner.scan_file(&rule_file, &mut next_finding_id);
             findings.extend(native_outcome.findings);
             outcome.issues.extend(native_outcome.issues);
@@ -255,7 +256,7 @@ impl ScanManager {
         } else {
             ScanStatus::Completed
         };
-        scanner_runs.push(crate::scanner::models::ScannerRunSummary {
+        scanner_runs.push(ScannerRunSummary {
             scanner_id: "native".to_string(),
             status: native_status,
             findings_count: findings.len() as u64,
@@ -301,16 +302,16 @@ impl ScanManager {
                 } else {
                     "gitleaks"
                 });
-                let start_time = std::time::Instant::now();
-                let (gl_findings, gl_issues) =
+                let start_time = Instant::now();
+                let (gitleaks_findings, gitleaks_issues) =
                     crate::scanner::gitleaks::run_gitleaks(target_path, &gitleaks_bin);
                 let duration_ms = start_time.elapsed().as_millis();
 
-                let issues_count = gl_issues.len() as u64;
-                let findings_count = gl_findings.len() as u64;
+                let issues_count = gitleaks_issues.len() as u64;
+                let findings_count = gitleaks_findings.len() as u64;
 
-                findings.extend(gl_findings);
-                outcome.issues.extend(gl_issues);
+                findings.extend(gitleaks_findings);
+                outcome.issues.extend(gitleaks_issues);
 
                 let status = if issues_count > 0 && findings_count == 0 {
                     ScanStatus::Failed
@@ -320,7 +321,7 @@ impl ScanManager {
                     ScanStatus::Completed
                 };
 
-                scanner_runs.push(crate::scanner::models::ScannerRunSummary {
+                scanner_runs.push(ScannerRunSummary {
                     scanner_id: "gitleaks".to_string(),
                     status,
                     findings_count,
@@ -343,16 +344,16 @@ impl ScanManager {
                 } else {
                     "semgrep"
                 });
-                let start_time = std::time::Instant::now();
-                let (sg_findings, sg_issues) =
+                let start_time = Instant::now();
+                let (semgrep_findings, semgrep_issues) =
                     crate::scanner::semgrep::run_semgrep(target_path, &semgrep_bin);
                 let duration_ms = start_time.elapsed().as_millis();
 
-                let issues_count = sg_issues.len() as u64;
-                let findings_count = sg_findings.len() as u64;
+                let issues_count = semgrep_issues.len() as u64;
+                let findings_count = semgrep_findings.len() as u64;
 
-                findings.extend(sg_findings);
-                outcome.issues.extend(sg_issues);
+                findings.extend(semgrep_findings);
+                outcome.issues.extend(semgrep_issues);
 
                 let status = if issues_count > 0 && findings_count == 0 {
                     ScanStatus::Failed
@@ -362,7 +363,7 @@ impl ScanManager {
                     ScanStatus::Completed
                 };
 
-                scanner_runs.push(crate::scanner::models::ScannerRunSummary {
+                scanner_runs.push(ScannerRunSummary {
                     scanner_id: "semgrep".to_string(),
                     status,
                     findings_count,
@@ -378,11 +379,11 @@ impl ScanManager {
         };
         for finding in &findings {
             match finding.severity {
-                crate::scanner::models::Severity::Minimal => summary.minimal_count += 1,
-                crate::scanner::models::Severity::Low => summary.low_count += 1,
-                crate::scanner::models::Severity::Medium => summary.medium_count += 1,
-                crate::scanner::models::Severity::High => summary.high_count += 1,
-                crate::scanner::models::Severity::Critical => summary.critical_count += 1,
+                Severity::Minimal => summary.minimal_count += 1,
+                Severity::Low => summary.low_count += 1,
+                Severity::Medium => summary.medium_count += 1,
+                Severity::High => summary.high_count += 1,
+                Severity::Critical => summary.critical_count += 1,
             }
         }
 
@@ -411,7 +412,7 @@ impl ScanManager {
             scan_id,
             target: handle.started.target.clone(),
             status,
-            started_at: started_at_unix_ms.clone(),
+            started_at,
             finished_at: Some(now_rfc3339()),
             summary: summary.clone(),
             coverage: outcome.coverage,
@@ -558,9 +559,9 @@ fn now_rfc3339() -> String {
         31,
     ];
     let mut month = 1;
-    for &d in month_days.iter() {
-        if days_remaining >= d {
-            days_remaining -= d;
+    for days_in_month in month_days {
+        if days_remaining >= days_in_month {
+            days_remaining -= days_in_month;
             month += 1;
         } else {
             break;
@@ -582,7 +583,7 @@ mod tests {
 
     use super::{NoopScanObserver, ScanManager};
     use crate::scanner::limits::ScanLimits;
-    use crate::scanner::models::{ScanRequest, ScanStatus};
+    use crate::scanner::models::{ScanRequest, ScanStatus, Severity};
 
     static NEXT_FIXTURE_ID: AtomicUsize = AtomicUsize::new(0);
 
@@ -733,20 +734,14 @@ mod tests {
             .iter()
             .find(|f| f.rule_id == "crypto.private_key")
             .unwrap();
-        assert_eq!(
-            private_key_finding.severity,
-            crate::scanner::models::Severity::Critical
-        );
+        assert_eq!(private_key_finding.severity, Severity::Critical);
 
         let generic_finding = result
             .findings
             .iter()
             .find(|f| f.rule_id == "generic.secret")
             .unwrap();
-        assert_eq!(
-            generic_finding.severity,
-            crate::scanner::models::Severity::Medium
-        );
+        assert_eq!(generic_finding.severity, Severity::Medium);
 
         let serialized = serde_json::to_string(&result.findings).unwrap();
         assert!(!serialized.contains("supersecret"));

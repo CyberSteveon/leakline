@@ -5,7 +5,6 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 
 #[derive(Deserialize)]
-#[allow(dead_code)]
 struct SemgrepOutput {
     results: Vec<SemgrepResult>,
     errors: Option<Vec<serde_json::Value>>,
@@ -79,30 +78,30 @@ fn parse_report(success: bool, report: &[u8]) -> (Vec<Finding>, Vec<ScanIssue>) 
             "Semgrep reported analysis errors; coverage is incomplete.",
         ));
     }
-    for (i, r) in output.results.into_iter().enumerate() {
-        let severity = match r.extra.severity.as_str() {
+    for (match_index, rule_match) in output.results.into_iter().enumerate() {
+        let severity = match rule_match.extra.severity.as_str() {
             "ERROR" => Severity::Critical,
             "WARNING" => Severity::Medium,
             _ => Severity::Low,
         };
 
         findings.push(Finding {
-            finding_id: format!("semgrep-{}", i),
+            finding_id: format!("semgrep-{match_index}"),
             scanner_id: "semgrep".to_string(),
-            rule_id: r.check_id,
+            rule_id: rule_match.check_id,
             title: "Semgrep Finding".to_string(),
             description: "Semgrep rule matched.".into(),
             severity,
             location: FindingLocation {
-                relative_path: r.path,
-                start_line: Some(r.start.line),
-                start_column: Some(r.start.col),
-                end_line: Some(r.end.line),
-                end_column: Some(r.end.col),
+                relative_path: rule_match.path,
+                start_line: Some(rule_match.start.line),
+                start_column: Some(rule_match.start.col),
+                end_line: Some(rule_match.end.line),
+                end_column: Some(rule_match.end.col),
             },
             tags: vec!["sast".to_string()],
             remediation: None,
-            fingerprint: "".to_string(),
+            fingerprint: String::new(),
         });
     }
     (findings, issues)

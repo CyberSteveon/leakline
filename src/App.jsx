@@ -2,79 +2,85 @@ import { useState, useEffect, useRef } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { open } from '@tauri-apps/plugin-dialog'
-import { 
-  Shield, 
-  Settings, 
-  Play, 
-  Download, 
-  CheckCircle, 
+import {
+  Shield,
+  Settings,
+  Play,
+  Download,
+  CheckCircle,
   XCircle,
-  AlertTriangle,
   FileSearch,
-  StopCircle
+  StopCircle,
 } from 'lucide-react'
 import { describeOutcome, waitForResult } from './scanOutcome.js'
 import './App.css'
 
 function App() {
-  const [deps, setDeps] = useState({ gitleaks_installed: false, semgrep_installed: false })
+  const [dependencies, setDependencies] = useState({
+    gitleaks_installed: false,
+    semgrep_installed: false,
+  })
   const [installing, setInstalling] = useState(false)
   const [uninstalling, setUninstalling] = useState(null)
   const [targetPath, setTargetPath] = useState('')
-  const [scanState, setScanState] = useState('idle') // idle, running, completed, error
+  const [scanState, setScanState] = useState('idle')
   const [progress, setProgress] = useState(null)
   const [result, setResult] = useState(null)
   const [scanError, setScanError] = useState('')
-  const session = useRef(null)
+  const activeSession = useRef(null)
   const findings = result?.findings ?? []
   const scanSummary = result?.summary
   const busy = ['starting', 'running', 'cancelling'].includes(scanState)
 
   useEffect(() => {
-    checkDeps()
-    return () => { session.current = null }
+    refreshDependencies()
+    return () => {
+      activeSession.current = null
+    }
   }, [])
 
-  const checkDeps = async () => {
+  const refreshDependencies = async () => {
     try {
       const status = await invoke('get_dependency_status')
-      setDeps(status)
-    } catch (e) {
-      console.error("Failed to get dependency status:", e)
+      setDependencies(status)
+    } catch (error) {
+      console.error('Failed to get dependency status:', error)
     }
   }
 
-  const installDeps = async () => {
+  const installDependencies = async () => {
     setInstalling(true)
     try {
       await invoke('install_dependency')
-      await checkDeps()
-    } catch (e) {
-      console.error("Failed to install dependencies:", e)
-      alert("Failed to install dependencies: " + e)
+      await refreshDependencies()
+    } catch (error) {
+      console.error('Failed to install dependencies:', error)
+      alert('Failed to install dependencies: ' + error)
     } finally {
       setInstalling(false)
     }
   }
 
-  const uninstallDep = async (depId) => {
+  const uninstallDependency = async (depId) => {
     setUninstalling(depId)
     try {
       await invoke('uninstall_dependency', { depId })
-      await checkDeps()
-    } catch (e) {
-      console.error("Failed to uninstall dependency:", e)
-      alert("Failed to uninstall dependency: " + e)
+      await refreshDependencies()
+    } catch (error) {
+      console.error('Failed to uninstall dependency:', error)
+      alert('Failed to uninstall dependency: ' + error)
     } finally {
       setUninstalling(null)
     }
   }
 
   const startScan = async () => {
-    if (!targetPath || session.current) return
-    const job = { id: null }
-    session.current = job
-    const current = () => session.current === job
+    if (!targetPath || activeSession.current) {
+      return
+    }
+    const scanSession = { id: null }
+    activeSession.current = scanSession
+    const isCurrentSession = () => activeSession.current === scanSession
     setScanState('starting')
     setProgress(null)
     setResult(null)
@@ -82,47 +88,74 @@ function App() {
     let unlisten
     try {
       unlisten = await listen('scan-progress', ({ payload }) => {
-        if (current() && payload.scanId === job.id) setProgress(payload)
+        if (isCurrentSession() && payload.scanId === scanSession.id) {
+          setProgress(payload)
+        }
       })
-      if (!current()) return
+      if (!isCurrentSession()) {
+        return
+      }
       const started = await invoke('start_scan', { request: { targetPath } })
-      job.id = started.scanId
-      if (!current()) return
+      scanSession.id = started.scanId
+      if (!isCurrentSession()) {
+        return
+      }
       setScanState('running')
-      const report = await waitForResult(job.id,
-        scanId => invoke('get_scan_result', { scanId }),
-        () => new Promise(resolve => setTimeout(resolve, 400)), current)
-      if (!current()) return
+      const report = await waitForResult(
+        scanSession.id,
+        (scanId) => invoke('get_scan_result', { scanId }),
+        () => new Promise((resolve) => setTimeout(resolve, 400)),
+        isCurrentSession,
+      )
+      if (!isCurrentSession()) {
+        return
+      }
       setResult(report)
       setScanState('completed')
       // React now owns the displayed report; release the backend copy.
-      await invoke('dismiss_scan_result', { scanId: job.id }).catch(() => {})
+      await invoke('dismiss_scan_result', { scanId: scanSession.id }).catch(
+        () => {},
+      )
     } catch (error) {
-      if (current()) {
-        setScanError(job.id == null ? (error?.message || 'Could not start scan.') : 'Scan result unavailable. No conclusion is available.')
+      if (isCurrentSession()) {
+        setScanError(
+          scanSession.id == null
+            ? error?.message || 'Could not start scan.'
+            : 'Scan result unavailable. No conclusion is available.',
+        )
         setScanState('error')
       }
     } finally {
       unlisten?.()
-      if (current()) session.current = null
-    }
-  }
-
-  const cancelScan = async () => {
-    const job = session.current
-    if (!job?.id) return
-    setScanState('cancelling')
-    try {
-      await invoke('cancel_scan', { scanId: job.id })
-    } catch (error) {
-      // Completion may already have won the race. Continue waiting for its result.
-      if (session.current === job && error?.code !== 'scan_not_active') {
-        setScanError('Cancellation was not acknowledged. Waiting for the scan result.')
+      if (isCurrentSession()) {
+        activeSession.current = null
       }
     }
   }
 
-  const depsReady = deps.gitleaks_installed && deps.semgrep_installed
+  const cancelScan = async () => {
+    const scanSession = activeSession.current
+    if (!scanSession?.id) {
+      return
+    }
+    setScanState('cancelling')
+    try {
+      await invoke('cancel_scan', { scanId: scanSession.id })
+    } catch (error) {
+      // Completion may already have won the race. Continue waiting for its result.
+      if (
+        activeSession.current === scanSession &&
+        error?.code !== 'scan_not_active'
+      ) {
+        setScanError(
+          'Cancellation was not acknowledged. Waiting for the scan result.',
+        )
+      }
+    }
+  }
+
+  const dependenciesReady =
+    dependencies.gitleaks_installed && dependencies.semgrep_installed
 
   const handleBrowse = async () => {
     try {
@@ -133,8 +166,8 @@ function App() {
       if (selectedPath) {
         setTargetPath(selectedPath)
       }
-    } catch (e) {
-      console.error("Failed to open dialog:", e)
+    } catch (error) {
+      console.error('Failed to open dialog:', error)
     }
   }
 
@@ -142,40 +175,97 @@ function App() {
     <div className="container">
       <div className="panel">
         <div className="panel-header">
-          <h2><Settings size={20} /> Dependencies</h2>
+          <h2>
+            <Settings size={20} /> Dependencies
+          </h2>
         </div>
-        
+
         <div className="dependency-status">
-          <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '1rem' }}>
-            Dependencies are needed for advanced secrets detection (Gitleaks) and static analysis (Semgrep). The native scanner will function without them.
+          <p
+            style={{
+              fontSize: '0.85rem',
+              color: 'var(--text-secondary)',
+              marginBottom: '1rem',
+            }}
+          >
+            Dependencies are needed for advanced secrets detection (Gitleaks)
+            and static analysis (Semgrep). The native scanner will function
+            without them.
           </p>
           <div className="status-info">
-            <div className={`status-indicator ${deps.gitleaks_installed ? 'installed' : 'missing'}`} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                {deps.gitleaks_installed ? <CheckCircle size={16} /> : <XCircle size={16} />}
-                <span>Gitleaks {deps.gitleaks_installed ? 'Installed' : 'Missing'}</span>
+            <div
+              className={`status-indicator ${dependencies.gitleaks_installed ? 'installed' : 'missing'}`}
+              style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+              }}
+            >
+              <div
+                style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}
+              >
+                {dependencies.gitleaks_installed ? (
+                  <CheckCircle size={16} />
+                ) : (
+                  <XCircle size={16} />
+                )}
+                <span>
+                  Gitleaks{' '}
+                  {dependencies.gitleaks_installed ? 'Installed' : 'Missing'}
+                </span>
               </div>
-              {deps.gitleaks_installed && (
-                <button 
-                  className="button" 
-                  style={{ padding: '0.2rem 0.5rem', fontSize: '0.75rem', borderColor: 'var(--accent-red)', color: 'var(--accent-red)', background: 'transparent' }}
-                  onClick={() => uninstallDep('gitleaks')}
+              {dependencies.gitleaks_installed && (
+                <button
+                  className="button"
+                  style={{
+                    padding: '0.2rem 0.5rem',
+                    fontSize: '0.75rem',
+                    borderColor: 'var(--accent-red)',
+                    color: 'var(--accent-red)',
+                    background: 'transparent',
+                  }}
+                  onClick={() => uninstallDependency('gitleaks')}
                   disabled={uninstalling === 'gitleaks'}
                 >
-                  {uninstalling === 'gitleaks' ? 'Uninstalling...' : 'Uninstall'}
+                  {uninstalling === 'gitleaks'
+                    ? 'Uninstalling...'
+                    : 'Uninstall'}
                 </button>
               )}
             </div>
-            <div className={`status-indicator ${deps.semgrep_installed ? 'installed' : 'missing'}`} style={{ marginTop: '0.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                {deps.semgrep_installed ? <CheckCircle size={16} /> : <XCircle size={16} />}
-                <span>Semgrep {deps.semgrep_installed ? 'Installed' : 'Missing'}</span>
+            <div
+              className={`status-indicator ${dependencies.semgrep_installed ? 'installed' : 'missing'}`}
+              style={{
+                marginTop: '0.5rem',
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+              }}
+            >
+              <div
+                style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}
+              >
+                {dependencies.semgrep_installed ? (
+                  <CheckCircle size={16} />
+                ) : (
+                  <XCircle size={16} />
+                )}
+                <span>
+                  Semgrep{' '}
+                  {dependencies.semgrep_installed ? 'Installed' : 'Missing'}
+                </span>
               </div>
-              {deps.semgrep_installed && (
-                <button 
-                  className="button" 
-                  style={{ padding: '0.2rem 0.5rem', fontSize: '0.75rem', borderColor: 'var(--accent-red)', color: 'var(--accent-red)', background: 'transparent' }}
-                  onClick={() => uninstallDep('semgrep')}
+              {dependencies.semgrep_installed && (
+                <button
+                  className="button"
+                  style={{
+                    padding: '0.2rem 0.5rem',
+                    fontSize: '0.75rem',
+                    borderColor: 'var(--accent-red)',
+                    color: 'var(--accent-red)',
+                    background: 'transparent',
+                  }}
+                  onClick={() => uninstallDependency('semgrep')}
                   disabled={uninstalling === 'semgrep'}
                 >
                   {uninstalling === 'semgrep' ? 'Uninstalling...' : 'Uninstall'}
@@ -183,48 +273,59 @@ function App() {
               )}
             </div>
           </div>
-          
-          <button 
-            className="button" 
-            onClick={installDeps} 
-            disabled={installing || depsReady}
+
+          <button
+            className="button"
+            onClick={installDependencies}
+            disabled={installing || dependenciesReady}
           >
             <Download size={16} />
-            {installing ? 'Installing...' : depsReady ? 'Up to Date' : 'Install Missing'}
+            {installing
+              ? 'Installing...'
+              : dependenciesReady
+                ? 'Up to Date'
+                : 'Install Missing'}
           </button>
         </div>
       </div>
 
       <div className="panel">
         <div className="panel-header">
-          <h2><Shield size={20} /> Security Scan</h2>
+          <h2>
+            <Shield size={20} /> Security Scan
+          </h2>
         </div>
-        
+
         <div className="input-group">
           <label>Local repository directory</label>
           <div style={{ display: 'flex', gap: '1rem' }}>
-            <input 
+            <input
               style={{ flex: 1 }}
               value={targetPath}
               onChange={(e) => setTargetPath(e.target.value)}
               placeholder="/path/to/your/project"
               disabled={busy}
             />
-            <button 
-              className="button" 
-              onClick={handleBrowse} 
-              disabled={busy}
-            >
+            <button className="button" onClick={handleBrowse} disabled={busy}>
               Browse
             </button>
             {busy ? (
-              <button className="button danger" onClick={cancelScan} disabled={scanState !== 'running'}>
-                <StopCircle size={16} /> {scanState === 'cancelling' ? 'Cancellation requested…' : scanState === 'starting' ? 'Starting…' : 'Stop Scan'}
+              <button
+                className="button danger"
+                onClick={cancelScan}
+                disabled={scanState !== 'running'}
+              >
+                <StopCircle size={16} />{' '}
+                {scanState === 'cancelling'
+                  ? 'Cancellation requested…'
+                  : scanState === 'starting'
+                    ? 'Starting…'
+                    : 'Stop Scan'}
               </button>
             ) : (
-              <button 
-                className="button" 
-                onClick={startScan} 
+              <button
+                className="button"
+                onClick={startScan}
                 disabled={!targetPath}
               >
                 <Play size={16} /> Start Scan
@@ -238,12 +339,17 @@ function App() {
           <div className="progress-container">
             <div className="progress-header">
               <span>Scanning... ({progress.phase})</span>
-              <span>{progress.processedFiles || 0} / {progress.selectedFiles || '?'} files</span>
+              <span>
+                {progress.processedFiles || 0} / {progress.selectedFiles || '?'}{' '}
+                files
+              </span>
             </div>
             <div className="progress-bar-bg">
-              <div 
-                className="progress-bar-fill" 
-                style={{ width: `${progress.selectedFiles ? Math.min(100, Math.round((progress.processedFiles / progress.selectedFiles) * 100)) : 0}%` }}
+              <div
+                className="progress-bar-fill"
+                style={{
+                  width: `${progress.selectedFiles ? Math.min(100, Math.round((progress.processedFiles / progress.selectedFiles) * 100)) : 0}%`,
+                }}
               ></div>
             </div>
             <div className="stats-grid">
@@ -263,21 +369,45 @@ function App() {
       {result && (
         <div className="panel">
           <div className="panel-header">
-            <h2><FileSearch size={20} /> Findings</h2>
+            <h2>
+              <FileSearch size={20} /> Findings
+            </h2>
           </div>
-          
-          <p role="status"><strong>{describeOutcome(result)}</strong></p>
+
+          <p role="status">
+            <strong>{describeOutcome(result)}</strong>
+          </p>
           <p>Target: {result.target.displayPath}</p>
-          <p>Native coverage: {result.coverage.nativeProcessedFiles} of {result.coverage.selectedFiles} selected files checked.
-            {' '}{result.coverage.skippedByPolicy} outside the file policy; {result.coverage.excludedVcsEntries} VCS entries excluded;
-            {' '}{result.coverage.skippedSymlinks} symlinks and {result.coverage.skippedOversized} oversized files skipped.</p>
-          <ul>{['native', 'gitleaks', 'semgrep'].map(id => {
-            const run = result.scannerRuns.find(r => r.scannerId === id)
-            return <li key={id}>{id}: {run ? run.status.replaceAll('_', ' ') : 'not run'}</li>
-          })}</ul>
-          {result.issues.length > 0 && <details><summary>{result.issues.length} scan issues</summary>
-            <ul>{result.issues.map((issue, i) => <li key={i}>{issue.stage}: {issue.message} {issue.relativePath}</li>)}</ul>
-          </details>}
+          <p>
+            Native coverage: {result.coverage.nativeProcessedFiles} of{' '}
+            {result.coverage.selectedFiles} selected files checked.{' '}
+            {result.coverage.skippedByPolicy} outside the file policy;{' '}
+            {result.coverage.excludedVcsEntries} VCS entries excluded;{' '}
+            {result.coverage.skippedSymlinks} symlinks and{' '}
+            {result.coverage.skippedOversized} oversized files skipped.
+          </p>
+          <ul>
+            {['native', 'gitleaks', 'semgrep'].map((id) => {
+              const run = result.scannerRuns.find((run) => run.scannerId === id)
+              return (
+                <li key={id}>
+                  {id}: {run ? run.status.replaceAll('_', ' ') : 'not run'}
+                </li>
+              )
+            })}
+          </ul>
+          {result.issues.length > 0 && (
+            <details>
+              <summary>{result.issues.length} scan issues</summary>
+              <ul>
+                {result.issues.map((issue, i) => (
+                  <li key={i}>
+                    {issue.stage}: {issue.message} {issue.relativePath}
+                  </li>
+                ))}
+              </ul>
+            </details>
+          )}
           <div className="stats-grid" style={{ marginBottom: '1.5rem' }}>
             <div className="stat-box">
               <div className="value">{scanSummary?.findingCount || 0}</div>
@@ -285,7 +415,8 @@ function App() {
             </div>
             <div className="stat-box">
               <div className="value" style={{ color: 'var(--accent-red)' }}>
-                {(scanSummary?.criticalCount || 0) + (scanSummary?.highCount || 0)}
+                {(scanSummary?.criticalCount || 0) +
+                  (scanSummary?.highCount || 0)}
               </div>
               <div className="label">Critical & High</div>
             </div>
@@ -306,21 +437,41 @@ function App() {
                   </tr>
                 </thead>
                 <tbody>
-                  {findings.map((f, i) => (
-                    <tr key={i}>
+                  {findings.map((finding, index) => (
+                    <tr key={index}>
                       <td>
-                        <span className={`severity-badge severity-${f.severity}`}>
-                          {f.severity}
+                        <span
+                          className={`severity-badge severity-${finding.severity}`}
+                        >
+                          {finding.severity}
                         </span>
                       </td>
                       <td>
-                        <span className="code-block">{f.location?.relativePath}</span>
-                        {f.location?.startLine && <span style={{ marginLeft: 5, fontSize: '0.8rem', color: 'var(--text-secondary)' }}>:{f.location.startLine}</span>}
+                        <span className="code-block">
+                          {finding.location?.relativePath}
+                        </span>
+                        {finding.location?.startLine && (
+                          <span
+                            style={{
+                              marginLeft: 5,
+                              fontSize: '0.8rem',
+                              color: 'var(--text-secondary)',
+                            }}
+                          >
+                            :{finding.location.startLine}
+                          </span>
+                        )}
                       </td>
                       <td>
-                        <strong>{f.ruleId}</strong>
-                        <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '0.25rem' }}>
-                          {f.title}
+                        <strong>{finding.ruleId}</strong>
+                        <div
+                          style={{
+                            fontSize: '0.75rem',
+                            color: 'var(--text-secondary)',
+                            marginTop: '0.25rem',
+                          }}
+                        >
+                          {finding.title}
                         </div>
                       </td>
                     </tr>
